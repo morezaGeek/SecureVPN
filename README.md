@@ -7,6 +7,9 @@ SecureVPN is a premium, high-performance, multi-protocol VPN application designe
 ## 📸 Screenshots
 
 <p align="center">
+  <img src="assets/screen_win.png" width="800" alt="SecureVPN Windows Main Screen">
+</p>
+<p align="center">
   <img src="assets/screen.png" width="350" alt="SecureVPN Android Main Screen">
   <img src="assets/screen_v110.png" width="350" alt="SecureVPN Android Profiles Screen">
 </p>

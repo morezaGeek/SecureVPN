@@ -1,0 +1,94 @@
+{
+  "name": "rahavpn-windows",
+  "version": "1.3.6",
+  "description": "RAHA VPN Windows Desktop Application",
+  "main": "dist-electron/main.js",
+  "author": "RAHA VPN",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "start-dev": "node start-dev.js",
+    "build": "npx tsc -p tsconfig.electron.json && vite build && electron-builder",
+    "build:dir": "npx tsc -p tsconfig.electron.json && vite build && electron-builder --dir",
+    "build:installer": "npx tsc -p tsconfig.electron.json && vite build && electron-builder --win nsis",
+    "preview": "vite preview",
+    "dist": "npm run build:installer"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "lucide-react": "^0.294.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^27.3.0",
+    "electron-builder": "^22.14.13",
+    "typescript": "^5.3.2",
+    "vite": "^5.0.7",
+    "vite-plugin-electron": "^0.15.5",
+    "vite-plugin-electron-renderer": "^0.14.5"
+  },
+  "build": {
+    "appId": "com.rahavpn.windows",
+    "productName": "Secure VPN",
+    "copyright": "Copyright © 2024 Secure VPN",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "public/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/openconnect",
+        "to": "openconnect",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/singbox",
+        "to": "singbox",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/icon.png",
+      "forceCodeSigning": false,
+      "sign": null,
+      "requestedExecutionLevel": "requireAdministrator",
+      "publisherName": "SecureVPN"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "shortcutName": "SecureVPN",
+      "uninstallDisplayName": "SecureVPN",
+      "include": "installer/nsis-include.nsh",
+      "warningsAsErrors": false,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

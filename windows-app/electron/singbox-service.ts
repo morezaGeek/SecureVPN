@@ -357,9 +357,11 @@ export class SingboxService extends EventEmitter {
 
         const customDomainSuffix: string[] = []
         for (const d of customDomains) {
-            const clean = d.startsWith('.') ? d.substring(1) : d
-            customDomainSuffix.push(clean)
-            customDomainSuffix.push(`.${clean}`)
+            const clean = d.replace(/^[*.]+/g, '')
+            if (clean) {
+                customDomainSuffix.push(clean)
+                customDomainSuffix.push(`.${clean}`)
+            }
         }
 
         const customIps = (config.bypassIps || [])
@@ -393,30 +395,19 @@ export class SingboxService extends EventEmitter {
                         inet4_range: '198.18.0.0/15'
                     },
                     {
-                        // Real DNS through proxy - for non-A/AAAA queries and bypass domains
+                        // Real DNS through proxy - for non-A/AAAA queries
                         type: 'udp',
                         tag: 'proxy-dns',
                         server: '8.8.8.8',
                         detour: 'proxy'
                     },
                     {
-                        // Direct DNS for local network and bypass domains
                         type: 'local',
                         tag: 'direct-dns'
                     }
                 ],
                 rules: [
-                    // Iranian domains need real IPs (for direct routing)
-                    ...(config.bypassIranRoutes ? [{
-                        domain_suffix: ['.ir'],
-                        server: 'direct-dns'
-                    }] : []),
-                    // Custom bypass domains need real IPs
-                    ...(customDomainSuffix.length > 0 ? [{
-                        domain_suffix: customDomainSuffix,
-                        server: 'direct-dns'
-                    }] : []),
-                    // All A/AAAA queries get FakeIP (instant, zero latency)
+                    // All A/AAAA queries get FakeIP for zero latency and full domain name recovery in routing
                     {
                         query_type: ['A', 'AAAA'],
                         server: 'fakeip'
@@ -474,7 +465,12 @@ export class SingboxService extends EventEmitter {
                         protocol: 'dns',
                         action: 'hijack-dns'
                     },
-                    // Custom domain bypass
+                    // Iranian domain bypass (.ir)
+                    {
+                        domain_suffix: ['.ir'],
+                        outbound: 'direct'
+                    },
+                    // Custom domain bypass (e.g. tci.ir and all subdomains like adsl.tci.ir)
                     ...(customDomainSuffix.length > 0 ? [{
                         domain_suffix: customDomainSuffix,
                         outbound: 'direct'
@@ -495,16 +491,11 @@ export class SingboxService extends EventEmitter {
                             outbound: 'direct'
                         }
                     ] : []),
-                    // Iranian domain bypass
-                    ...(config.bypassIranRoutes ? [{
-                        domain_suffix: ['.ir'],
-                        outbound: 'direct'
-                    }] : []),
-                    // Iranian IP bypass
-                    ...(config.bypassIranRoutes ? [{
+                    // Iranian IP bypass (always direct so Iranian services never fail)
+                    {
                         ip_cidr: IRAN_IP_CIDRS,
                         outbound: 'direct'
-                    }] : []),
+                    },
                     // FakeIP range → proxy
                     {
                         ip_cidr: ['198.18.0.0/15'],
@@ -778,13 +769,13 @@ export class SingboxService extends EventEmitter {
                         .filter(d => d.length > 0)
 
                     for (const d of customDomains) {
-                        const clean = d.startsWith('.') ? d.substring(1) : d
-                        override += `;${clean};*.${clean}`
+                        const clean = d.replace(/^[*.]+/g, '')
+                        if (clean) {
+                            override += `;${clean};*.${clean};*${clean}`
+                        }
                     }
 
-                    if (config.bypassIranRoutes) {
-                        override += ';*.ir;*.ir.*'
-                    }
+                    override += ';*.ir;*.ir.*'
                 }
 
                 execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyOverride /t REG_SZ /d "${override}" /f`, { stdio: 'ignore' })

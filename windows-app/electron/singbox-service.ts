@@ -67,6 +67,7 @@ export class SingboxService extends EventEmitter {
     private originalIfIndex: number | null = null
     private originalIfName: string = ''
     private serverIp: string = ''
+    private activeProfileConfig: SingboxProfile | null = null
 
     // Traffic stats tracking for speed calculation
     private lastBytesReceived: number = 0
@@ -354,8 +355,12 @@ export class SingboxService extends EventEmitter {
             .map(d => d.trim().toLowerCase())
             .filter(d => d.length > 0)
 
-        const customDomainExact = customDomains.filter(d => !d.startsWith('.'))
-        const customDomainSuffix = customDomains.map(d => d.startsWith('.') ? d.substring(1) : d)
+        const customDomainSuffix: string[] = []
+        for (const d of customDomains) {
+            const clean = d.startsWith('.') ? d.substring(1) : d
+            customDomainSuffix.push(clean)
+            customDomainSuffix.push(`.${clean}`)
+        }
 
         const customIps = (config.bypassIps || [])
             .map(ip => ip.trim())
@@ -407,8 +412,7 @@ export class SingboxService extends EventEmitter {
                         server: 'direct-dns'
                     }] : []),
                     // Custom bypass domains need real IPs
-                    ...(customDomains.length > 0 ? [{
-                        domain: customDomainExact,
+                    ...(customDomainSuffix.length > 0 ? [{
                         domain_suffix: customDomainSuffix,
                         server: 'direct-dns'
                     }] : []),
@@ -429,7 +433,7 @@ export class SingboxService extends EventEmitter {
                     address: ['172.19.0.1/30'],
                     mtu: config.mtu || 1400,
                     auto_route: true,
-                    strict_route: true,
+                    strict_route: false,
                     stack: 'system',
                     endpoint_independent_nat: true,
                     ...(config.bypassPrivateIps !== false ? {
@@ -471,8 +475,7 @@ export class SingboxService extends EventEmitter {
                         action: 'hijack-dns'
                     },
                     // Custom domain bypass
-                    ...(customDomains.length > 0 ? [{
-                        domain: customDomainExact,
+                    ...(customDomainSuffix.length > 0 ? [{
                         domain_suffix: customDomainSuffix,
                         outbound: 'direct'
                     }] : []),
@@ -626,6 +629,9 @@ export class SingboxService extends EventEmitter {
             // Log the transport and TLS settings for debugging
             this.log('debug', `Transport: ${config.transport}, Security: ${config.security}, Path: ${config.path || 'none'}`)
 
+            // Save active profile config for proxy override calculation
+            this.activeProfileConfig = config
+
             // Generate config
             const singboxConfig = this.generateConfig(protocol, config)
             fs.writeFileSync(this.configPath, JSON.stringify(singboxConfig, null, 2), 'utf8')
@@ -757,12 +763,32 @@ export class SingboxService extends EventEmitter {
     /**
      * Enable or disable Windows System Proxy (HTTP/SOCKS5 via 127.0.0.1:2080)
      */
-    private setSystemProxy(enable: boolean) {
+    private setSystemProxy(enable: boolean, config?: SingboxProfile | null) {
         try {
             if (enable) {
                 execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f`, { stdio: 'ignore' })
                 execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /t REG_SZ /d "127.0.0.1:2080" /f`, { stdio: 'ignore' })
-                this.log('info', 'Enabled Windows System Proxy (127.0.0.1:2080)')
+
+                // Build ProxyOverride string for Windows System Proxy
+                let override = '<local>;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;192.168.*'
+
+                if (config) {
+                    const customDomains = (config.bypassDomains || [])
+                        .map(d => d.trim().toLowerCase())
+                        .filter(d => d.length > 0)
+
+                    for (const d of customDomains) {
+                        const clean = d.startsWith('.') ? d.substring(1) : d
+                        override += `;${clean};*.${clean}`
+                    }
+
+                    if (config.bypassIranRoutes) {
+                        override += ';*.ir;*.ir.*'
+                    }
+                }
+
+                execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyOverride /t REG_SZ /d "${override}" /f`, { stdio: 'ignore' })
+                this.log('info', 'Enabled Windows System Proxy (127.0.0.1:2080) with bypass rules')
             } else {
                 execSync(`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f`, { stdio: 'ignore' })
                 this.log('info', 'Disabled Windows System Proxy')
@@ -786,8 +812,8 @@ export class SingboxService extends EventEmitter {
         this.emitStateChange()
         this.log('info', 'Connected successfully')
 
-        // Enable Windows System Proxy (127.0.0.1:2080) for 100% full ISP speed in browsers
-        this.setSystemProxy(true)
+        // Enable Windows System Proxy (127.0.0.1:2080) for 100% full ISP speed in browsers with ProxyOverride bypass rules
+        this.setSystemProxy(true, this.activeProfileConfig)
 
         // Fetch public IP
         await this.fetchPublicIp()

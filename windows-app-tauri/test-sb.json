@@ -1,0 +1,1 @@
+{"dns":{"servers":[{"tag":"direct-dns","type":"local"},{"tag":"proxy-dns","type":"tcp","server":"8.8.8.8"}],"rules":[{"domain_suffix":[".soft98.ir"],"server":"direct-dns"}]},"route":{"rules":[{"domain_suffix":[".soft98.ir"],"outbound":"direct"}]}}

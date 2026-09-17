@@ -1,0 +1,61 @@
+{
+    "log": {
+        "level": "debug",
+        "timestamp": true
+    },
+    "dns": {
+        "servers": [
+            {
+                "tag": "google",
+                "address": "tls://8.8.8.8",
+                "detour": "proxy"
+            }
+        ],
+        "final": "google"
+    },
+    "inbounds": [
+        {
+            "type": "mixed",
+            "tag": "mixed-in",
+            "listen": "127.0.0.1",
+            "listen_port": 10808
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "vless",
+            "tag": "proxy",
+            "server": "us.rahanetmci.com",
+            "server_port": 443,
+            "uuid": "9b5882c0-c3bc-45c3-be05-a47e885fc292",
+            "tls": {
+                "enabled": true,
+                "server_name": "us.rahanetmci.com",
+                "insecure": false,
+                "alpn": [
+                    "h2",
+                    "http/1.1"
+                ],
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                }
+            },
+            "transport": {
+                "type": "ws",
+                "path": "/",
+                "headers": {
+                    "Host": "us.rahanetmci.com"
+                }
+            }
+        },
+        {
+            "type": "direct",
+            "tag": "direct"
+        }
+    ],
+    "route": {
+        "final": "proxy",
+        "auto_detect_interface": true
+    }
+}

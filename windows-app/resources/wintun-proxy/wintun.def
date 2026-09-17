@@ -1,0 +1,20 @@
+; wintun.def - Module definition file for Wintun Proxy DLL
+; This ensures the exported function names match exactly
+
+LIBRARY wintun
+
+EXPORTS
+    WintunCreateAdapter
+    WintunOpenAdapter
+    WintunCloseAdapter
+    WintunDeleteDriver
+    WintunGetAdapterLUID
+    WintunGetRunningDriverVersion
+    WintunSetLogger
+    WintunStartSession
+    WintunEndSession
+    WintunGetReadWaitEvent
+    WintunReceivePacket
+    WintunReleaseReceivePacket
+    WintunAllocateSendPacket
+    WintunSendPacket

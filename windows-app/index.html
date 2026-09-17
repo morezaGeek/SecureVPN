@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Content Security Policy to prevent XSS but allow our scripts -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data: file: *; img-src 'self' data: https://flagcdn.com; connect-src 'self'">
+    <title>Secure VPN</title>
+  </head>
+  <body>
+    <!-- Initial Loading Screen -->
+    <div id="loading-screen">
+      <div class="spinner"></div>
+      <h2 style="font-weight: 300;">Secure VPN</h2>
+      <p style="color: #666; font-size: 14px; margin-top: 10px;">Starting secure core...</p>
+    </div>
+
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    
+    <!-- Script to hide loading screen when app is ready -->
+    <script>
+      // We'll dispatch a custom event from React when it's fully rendered
+      window.addEventListener('app-ready', () => {
+        const loadingScreen = document.getElementById('loading-screen');
+        if (loadingScreen) {
+          loadingScreen.style.opacity = '0';
+          loadingScreen.style.transition = 'opacity 0.3s ease';
+          setTimeout(() => {
+            loadingScreen.style.display = 'none';
+          }, 300);
+        }
+      });
+      
+      // Fallback: hide loading screen after 5 seconds no matter what
+      setTimeout(() => {
+        const loadingScreen = document.getElementById('loading-screen');
+        if (loadingScreen && loadingScreen.style.display !== 'none') {
+          loadingScreen.style.display = 'none';
+        }
+      }, 5000);
+    </script>
+  </body>
+</html>

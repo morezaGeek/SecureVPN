@@ -321,7 +321,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setProfiles(prev => prev.filter(p => p.subscriptionId !== id))
     }, [])
 
-    const testAllPings = useCallback(async (mode: 'tcp' | 'http' | 'real' = 'tcp') => {
+    const testAllPings = useCallback(async (mode: 'tcp' | 'http' | 'real' = 'real') => {
         if (!window.electronAPI || isTestingPings) return
         
         setIsTestingPings(true)
@@ -394,7 +394,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setIsTestingPings(false)
     }, [profiles, isTestingPings])
 
-    const testSingleProfile = useCallback(async (profileId: string, mode: 'tcp' | 'http' | 'real' = 'tcp') => {
+    const testSingleProfile = useCallback(async (profileId: string, mode: 'tcp' | 'http' | 'real' = 'real') => {
         if (!window.electronAPI) return
         const profile = profiles.find(p => p.id === profileId)
         if (!profile) return

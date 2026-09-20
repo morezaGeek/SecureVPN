@@ -49,7 +49,7 @@ export default function ProfilesScreen() {
     } = useVpn()
     const [pingMode, setPingMode] = useState<'tcp' | 'http' | 'real'>(() => {
         const saved = localStorage.getItem('vpn-ping-mode')
-        if (saved === 'real' || saved === 'http' || saved === 'tcp') return saved
+        if (saved === 'real' || saved === 'tcp') return saved
         return 'real'
     })
 
@@ -364,31 +364,23 @@ export default function ProfilesScreen() {
 
                 {profiles.length > 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {/* Segmented control: [TCP] [HTTP] [Real delay] */}
+                        {/* Segmented control: [Real delay] [TCP] */}
                         <div className="ping-mode-group">
-                            <button 
-                                type="button" 
-                                className={`ping-mode-btn ${pingMode === 'tcp' ? 'active' : ''}`}
-                                onClick={() => setPingMode('tcp')}
-                                title="Direct TCP latency (TCPing - V2rayN default)"
-                            >
-                                TCP
-                            </button>
-                            <button 
-                                type="button" 
-                                className={`ping-mode-btn ${pingMode === 'http' ? 'active' : ''}`}
-                                onClick={() => setPingMode('http')}
-                                title="Direct HTTP/HTTPS latency"
-                            >
-                                HTTP
-                            </button>
                             <button 
                                 type="button" 
                                 className={`ping-mode-btn ${pingMode === 'real' ? 'active' : ''}`}
                                 onClick={() => setPingMode('real')}
-                                title="Real delay through proxy tunnel via Google (V2rayN method)"
+                                title="Real delay through proxy tunnel via Google (V2rayN True Real Delay)"
                             >
                                 Real delay
+                            </button>
+                            <button 
+                                type="button" 
+                                className={`ping-mode-btn ${pingMode === 'tcp' ? 'active' : ''}`}
+                                onClick={() => setPingMode('tcp')}
+                                title="Direct TCP latency to server relay"
+                            >
+                                TCP
                             </button>
                         </div>
 

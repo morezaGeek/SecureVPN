@@ -37,9 +37,21 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-light.png"))
+                .or_else(|_| tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")))
+                .ok();
+
+            let mut tray_builder = TrayIconBuilder::new()
                 .menu(&tray_menu)
-                .show_menu_on_left_click(false)
+                .show_menu_on_left_click(false);
+
+            if let Some(ic) = tray_icon {
+                tray_builder = tray_builder.icon(ic);
+            } else if let Some(def_ic) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(def_ic.clone());
+            }
+
+            let _tray = tray_builder
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {

@@ -572,18 +572,37 @@ pub async fn http_ping(host: String, port: u16, tls: Option<bool>, sni: Option<S
 #[tauri::command]
 pub async fn singbox_test_latency() -> Result<Value, String> {
     tokio::task::spawn_blocking(|| {
-        let start = std::time::Instant::now();
-        let res = ureq::get("http://127.0.0.1:9090/proxies/proxy/delay?url=http://www.gstatic.com/generate_204&timeout=3000")
+        let proxy = match ureq::Proxy::new("http://127.0.0.1:2080") {
+            Ok(p) => p,
+            Err(_) => return Ok(json!({ "success": false, "latency": -1 })),
+        };
+        let agent = ureq::AgentBuilder::new()
+            .proxy(proxy)
             .timeout(std::time::Duration::from_millis(3500))
-            .call();
+            .build();
 
-        match res {
-            Ok(r) if r.status() == 200 => {
-                let json_body: Value = r.into_json().unwrap_or(json!({}));
-                let delay = json_body.get("delay").and_then(|v| v.as_i64()).unwrap_or(start.elapsed().as_millis() as i64);
-                Ok(json!({ "success": true, "latency": delay }))
+        let mut min_ms = -1i64;
+        for _ in 0..2 {
+            let start = std::time::Instant::now();
+            let res = agent.get("https://www.google.com/generate_204").call();
+            let elapsed = start.elapsed().as_millis() as i64;
+            let is_ok = match res {
+                Ok(r) => r.status() == 204 || r.status() == 200,
+                Err(ureq::Error::Status(204, _)) | Err(ureq::Error::Status(200, _)) => true,
+                _ => false,
+            };
+            if is_ok {
+                if min_ms == -1 || elapsed < min_ms {
+                    min_ms = elapsed;
+                }
             }
-            _ => Ok(json!({ "success": true, "latency": start.elapsed().as_millis() as i64 })),
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+
+        if min_ms > 0 {
+            Ok(json!({ "success": true, "latency": min_ms }))
+        } else {
+            Ok(json!({ "success": false, "latency": -1 }))
         }
     })
     .await
@@ -595,12 +614,14 @@ pub async fn singbox_test_server_ping() -> Result<Value, String> {
     Ok(json!({ "success": true, "latency": 25 }))
 }
 
-fn find_available_port(start_port: u16) -> u16 {
-    for port in start_port..start_port + 50 {
-        if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
-            drop(listener);
-            return port;
+fn find_available_port_range(start_port: u16, count: u16) -> u16 {
+    'outer: for base in (start_port..start_port + 500).step_by(1) {
+        for offset in 0..count {
+            if std::net::TcpListener::bind(("127.0.0.1", base + offset)).is_err() {
+                continue 'outer;
+            }
         }
+        return base;
     }
     start_port
 }
@@ -645,8 +666,8 @@ pub async fn singbox_batch_real_delay(
     let unique_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
     let config_path = temp_dir.join(format!("sb-batch-{}.json", unique_id));
 
-    let clash_port = find_available_port(9092);
-    let tag_map = build_singbox_batch_test_config(&sb_profiles, &config_path, clash_port).await?;
+    let base_port = find_available_port_range(11000, sb_profiles.len() as u16 + 5);
+    let port_map = build_singbox_batch_test_config(&sb_profiles, &config_path, base_port).await?;
 
     #[cfg(windows)]
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -661,16 +682,12 @@ pub async fn singbox_batch_real_delay(
 
     let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn sing-box test runner: {}", e))?;
 
-    // Wait for Clash API to become ready (up to 2.5s)
-    let check_url = format!("http://127.0.0.1:{}/proxies", clash_port);
+    // Wait for inbounds to become ready
+    let first_port = port_map.first().map(|(_, p)| *p).unwrap_or(base_port);
     let mut ready = false;
-    for _ in 0..25 {
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-        let is_up = tokio::task::spawn_blocking({
-            let url = check_url.clone();
-            move || ureq::get(&url).timeout(std::time::Duration::from_millis(150)).call().is_ok()
-        }).await.unwrap_or(false);
-        if is_up {
+    for _ in 0..30 {
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        if std::net::TcpStream::connect(("127.0.0.1", first_port)).is_ok() {
             ready = true;
             break;
         }
@@ -679,31 +696,46 @@ pub async fn singbox_batch_real_delay(
     if !ready {
         let _ = child.kill().await;
         let _ = std::fs::remove_file(&config_path);
-        return Err("sing-box test runner failed to start Clash API".into());
+        return Err("sing-box test runner failed to start listeners".into());
     }
 
-    let target_url = test_url.unwrap_or_else(|| "http://www.gstatic.com/generate_204".to_string());
-    let chunks: Vec<Vec<(String, String)>> = tag_map.chunks(6).map(|c| c.to_vec()).collect();
+    let target_url = test_url.unwrap_or_else(|| "https://www.google.com/generate_204".to_string());
+    let chunks: Vec<Vec<(String, u16)>> = port_map.chunks(6).map(|c| c.to_vec()).collect();
 
     for chunk in chunks {
         let mut tasks = Vec::new();
-        for (profile_id, tag) in chunk {
-            let delay_url = format!(
-                "http://127.0.0.1:{}/proxies/{}/delay?url={}&timeout=3000",
-                clash_port, tag, target_url
-            );
+        for (profile_id, port) in chunk {
+            let url = target_url.clone();
             tasks.push(tokio::task::spawn_blocking(move || {
-                let res = ureq::get(&delay_url)
+                let proxy_url = format!("http://127.0.0.1:{}", port);
+                let proxy = match ureq::Proxy::new(&proxy_url) {
+                    Ok(p) => p,
+                    Err(_) => return (profile_id, -1),
+                };
+
+                let agent = ureq::AgentBuilder::new()
+                    .proxy(proxy)
                     .timeout(std::time::Duration::from_millis(3500))
-                    .call();
-                match res {
-                    Ok(r) if r.status() == 200 => {
-                        let val: Value = r.into_json().unwrap_or(json!({}));
-                        let delay = val.get("delay").and_then(|v| v.as_i64()).unwrap_or(-1);
-                        (profile_id, delay)
+                    .build();
+
+                let mut min_ms = -1i64;
+                for _ in 0..2 {
+                    let start = std::time::Instant::now();
+                    let res = agent.get(&url).call();
+                    let elapsed = start.elapsed().as_millis() as i64;
+                    let is_ok = match res {
+                        Ok(r) => r.status() == 204 || r.status() == 200,
+                        Err(ureq::Error::Status(204, _)) | Err(ureq::Error::Status(200, _)) => true,
+                        _ => false,
+                    };
+                    if is_ok {
+                        if min_ms == -1 || elapsed < min_ms {
+                            min_ms = elapsed;
+                        }
                     }
-                    _ => (profile_id, -1),
+                    std::thread::sleep(std::time::Duration::from_millis(40));
                 }
+                (profile_id, min_ms)
             }));
         }
 

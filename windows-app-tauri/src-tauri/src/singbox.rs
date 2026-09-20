@@ -142,12 +142,19 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
         });
 
         if security == "tls" {
-            let alpn = if transport == "ws" || transport == "httpupgrade" {
-                vec!["http/1.1"]
+            let custom_alpn: Option<Vec<String>> = singbox_cfg.get("alpn")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .filter(|v: &Vec<String>| !v.is_empty());
+
+            let alpn = if let Some(custom) = custom_alpn {
+                custom
+            } else if transport == "ws" || transport == "httpupgrade" {
+                vec!["h2".to_string(), "http/1.1".to_string()]
             } else if transport == "xhttp" || transport == "grpc" {
-                vec!["h2"]
+                vec!["h2".to_string()]
             } else {
-                vec!["h2", "http/1.1"]
+                vec!["h2".to_string(), "http/1.1".to_string()]
             };
             tls_obj["alpn"] = json!(alpn);
         }
@@ -204,11 +211,12 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
 pub async fn build_singbox_batch_test_config(
     profiles: &[Value],
     config_path: &Path,
-    clash_api_port: u16,
-) -> Result<Vec<(String, String)>, String> {
+    base_port: u16,
+) -> Result<Vec<(String, u16)>, String> {
     let mut outbounds = Vec::new();
-    let mut tag_map = Vec::new();
-    let mut direct_rules = Vec::new();
+    let mut inbounds = Vec::new();
+    let mut route_rules = Vec::new();
+    let mut port_map = Vec::new();
 
     for (i, p) in profiles.iter().enumerate() {
         let protocol = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
@@ -218,15 +226,25 @@ pub async fn build_singbox_batch_test_config(
 
         let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let tag = format!("proxy-{}", i);
+        let in_tag = format!("in-{}", i);
+        let port = base_port + i as u16;
 
         match build_singbox_outbound_with_tag(p, &tag).await {
-            Ok((raw_addr, server_ip, outbound)) => {
-                direct_rules.push(json!({ "domain": [raw_addr], "outbound": "direct" }));
-                if server_ip.parse::<std::net::IpAddr>().is_ok() {
-                    direct_rules.push(json!({ "ip_cidr": [format!("{}/32", server_ip)], "outbound": "direct" }));
-                }
+            Ok((_raw_addr, _server_ip, outbound)) => {
+                inbounds.push(json!({
+                    "type": "mixed",
+                    "tag": in_tag,
+                    "listen": "127.0.0.1",
+                    "listen_port": port
+                }));
+
+                route_rules.push(json!({
+                    "inbound": [in_tag],
+                    "outbound": tag
+                }));
+
                 outbounds.push(outbound);
-                tag_map.push((id, tag));
+                port_map.push((id, port));
             }
             Err(e) => {
                 eprintln!("[BatchTestConfig] Failed to build outbound for profile {}: {}", id, e);
@@ -254,30 +272,17 @@ pub async fn build_singbox_batch_test_config(
             ],
             "strategy": "ipv4_only"
         },
-        "inbounds": [
-            {
-                "type": "mixed",
-                "tag": "mixed-in",
-                "listen": "127.0.0.1",
-                "listen_port": clash_api_port + 100
-            }
-        ],
+        "inbounds": inbounds,
         "outbounds": outbounds,
         "route": {
-            "default_domain_resolver": "direct-dns",
-            "rules": direct_rules,
+            "rules": route_rules,
             "final": "direct"
-        },
-        "experimental": {
-            "clash_api": {
-                "external_controller": format!("127.0.0.1:{}", clash_api_port)
-            }
         }
     });
 
     let config_str = serde_json::to_string_pretty(&full_config).map_err(|e| e.to_string())?;
     std::fs::write(config_path, config_str).map_err(|e| e.to_string())?;
-    Ok(tag_map)
+    Ok(port_map)
 }
 
 #[allow(dead_code)]

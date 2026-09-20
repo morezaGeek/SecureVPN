@@ -42,6 +42,7 @@ export default function ProfilesScreen() {
         refreshSubscription, 
         refreshingSubIds,
         testAllPings, 
+        testSingleProfile,
         clearPings,
         isTestingPings, 
         testingProfileIds 
@@ -230,27 +231,33 @@ export default function ProfilesScreen() {
         }
     }
 
-    // Ctrl+V shortcut for quick V2Ray link paste
+    // Keyboard shortcuts: Ctrl+V (paste link) and Ctrl+R (test ping on selected profile)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Check if Ctrl+V (or Cmd+V on Mac) is pressed
-            if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-                // Don't intercept if modal is open or if an input/textarea is focused
-                const activeElement = document.activeElement
-                const isInputFocused = activeElement?.tagName === 'INPUT' ||
-                    activeElement?.tagName === 'TEXTAREA' ||
-                    (activeElement as HTMLElement)?.isContentEditable
+            if (isModalOpen) return
 
-                if (!isModalOpen && !isInputFocused) {
-                    e.preventDefault()
-                    handleImportFromClipboard()
+            const activeElement = document.activeElement
+            const isInputFocused = activeElement?.tagName === 'INPUT' ||
+                activeElement?.tagName === 'TEXTAREA' ||
+                (activeElement as HTMLElement)?.isContentEditable
+
+            if (isInputFocused) return
+
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+                e.preventDefault()
+                handleImportFromClipboard()
+            } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') {
+                e.preventDefault()
+                const target = currentProfile || profiles[0]
+                if (target) {
+                    testSingleProfile(target.id, pingMode)
                 }
             }
         }
 
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [isModalOpen])
+    }, [isModalOpen, currentProfile, profiles, pingMode, testSingleProfile])
 
     return (
         <div>
@@ -458,12 +465,17 @@ export default function ProfilesScreen() {
                                             Testing...
                                         </span>
                                     ) : profile.ping !== undefined ? (
-                                        <span style={{ 
-                                            marginLeft: '8px', 
-                                            fontSize: '0.85em', 
-                                            color: profile.ping > 0 ? (profile.ping < 200 ? 'var(--success)' : 'var(--warning)') : 'var(--danger)',
-                                            fontWeight: 500
-                                        }}>
+                                        <span 
+                                            onClick={(e) => { e.stopPropagation(); testSingleProfile(profile.id, pingMode) }}
+                                            style={{ 
+                                                marginLeft: '8px', 
+                                                fontSize: '0.85em', 
+                                                color: profile.ping > 0 ? (profile.ping < 200 ? 'var(--success)' : 'var(--warning)') : 'var(--danger)',
+                                                fontWeight: 500,
+                                                cursor: 'pointer'
+                                            }}
+                                            title={`Click to retest ${pingMode.toUpperCase()} (Ctrl+R)`}
+                                        >
                                             {profile.ping > 0 ? `${profile.ping}ms` : 'Timeout'}
                                         </span>
                                     ) : null}
@@ -488,6 +500,14 @@ export default function ProfilesScreen() {
                                     return PROTOCOL_INFO[profile.protocol].displayName
                                 })()}
                             </span>
+                            <button
+                                className="title-bar-button"
+                                onClick={(e) => { e.stopPropagation(); testSingleProfile(profile.id, pingMode) }}
+                                title={`Test ${pingMode.toUpperCase()} (Ctrl+R)`}
+                                disabled={testingProfileIds?.includes(profile.id)}
+                            >
+                                <Activity size={16} className={testingProfileIds?.includes(profile.id) ? 'spin-animation' : ''} />
+                            </button>
                             <button
                                 className="title-bar-button"
                                 onClick={(e) => { e.stopPropagation(); openEditModal(profile) }}

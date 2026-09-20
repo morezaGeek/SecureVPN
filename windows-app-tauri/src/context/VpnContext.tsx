@@ -26,6 +26,7 @@ interface VpnContextType {
     connect: () => Promise<void>
     disconnect: () => Promise<void>
     testAllPings: (mode?: 'tcp' | 'http' | 'real') => Promise<void>
+    testSingleProfile: (profileId: string, mode?: 'tcp' | 'http' | 'real') => Promise<void>
     clearPings: () => void
     isTestingPings: boolean
     testingProfileIds: string[]
@@ -393,6 +394,48 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setIsTestingPings(false)
     }, [profiles, isTestingPings])
 
+    const testSingleProfile = useCallback(async (profileId: string, mode: 'tcp' | 'http' | 'real' = 'tcp') => {
+        if (!window.electronAPI) return
+        const profile = profiles.find(p => p.id === profileId)
+        if (!profile) return
+
+        setTestingProfileIds(prev => prev.includes(profileId) ? prev : [...prev, profileId])
+
+        let finalLatency = -1
+        try {
+            if (mode === 'tcp') {
+                if (profile.serverAddress && profile.port) {
+                    const res = await window.electronAPI.tcpPing(profile.serverAddress, profile.port)
+                    if (res.success && res.latency > 0) {
+                        finalLatency = res.latency
+                    }
+                }
+            } else if (mode === 'http') {
+                if (profile.serverAddress && profile.port) {
+                    const isTls = profile.singboxConfig?.security === 'tls' || 
+                                  profile.singboxConfig?.security === 'reality' || 
+                                  profile.port === 443
+                    const sni = profile.singboxConfig?.sni || profile.serverAddress
+                    const res = await window.electronAPI.httpPing(profile.serverAddress, profile.port, isTls, sni)
+                    if (res.success && res.latency > 0) {
+                        finalLatency = res.latency
+                    }
+                }
+            } else {
+                // Real delay
+                const res = await window.electronAPI.testProfileRealDelay(profile)
+                if (res.success && res.latency > 0) {
+                    finalLatency = res.latency
+                }
+            }
+        } catch (e) {
+            finalLatency = -1
+        }
+
+        setProfiles(prev => prev.map(p => p.id === profileId ? { ...p, ping: finalLatency, pingMode: mode } : p))
+        setTestingProfileIds(prev => prev.filter(id => id !== profileId))
+    }, [profiles])
+
     const clearPings = useCallback(() => {
         setProfiles(prev => prev.map(p => ({ ...p, ping: undefined, pingMode: undefined })))
     }, [])
@@ -589,6 +632,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
         connect,
         disconnect,
         testAllPings,
+        testSingleProfile,
         clearPings,
         isTestingPings,
         testingProfileIds,
@@ -615,6 +659,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
         connect,
         disconnect,
         testAllPings,
+        testSingleProfile,
         clearPings,
         isTestingPings,
         testingProfileIds,

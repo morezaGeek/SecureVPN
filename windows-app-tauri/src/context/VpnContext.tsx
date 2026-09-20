@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react'
 import { VpnProfile, ConnectionState, ConnectionStats, ConnectionLog, AppSettings, createDefaultSettings, VpnSubscription, createDefaultProfile } from '../types'
 
 interface VpnContextType {
@@ -19,12 +19,16 @@ interface VpnContextType {
     addSubscription: (url: string) => Promise<void>
     updateSubscription: (sub: VpnSubscription) => void
     deleteSubscription: (id: string) => void
-    refreshSubscription: (id: string) => Promise<void>
+    refreshSubscription: (id: string, directSub?: VpnSubscription) => Promise<void>
+    refreshingSubIds: string[]
 
     // Connection actions
     connect: () => Promise<void>
     disconnect: () => Promise<void>
-    testAllPings: () => Promise<void>
+    testAllPings: (mode?: 'tcp' | 'http' | 'real') => Promise<void>
+    clearPings: () => void
+    isTestingPings: boolean
+    testingProfileIds: string[]
 
     // Logs
     logs: ConnectionLog[]
@@ -65,6 +69,12 @@ export function VpnProvider({ children }: VpnProviderProps) {
     })
     const [profiles, setProfiles] = useState<VpnProfile[]>([])
     const [subscriptions, setSubscriptions] = useState<VpnSubscription[]>([])
+    const [refreshingSubIds, setRefreshingSubIds] = useState<string[]>([])
+    const [isTestingPings, setIsTestingPings] = useState(false)
+    const [testingProfileIds, setTestingProfileIds] = useState<string[]>([])
+    const subscriptionsRef = useRef<VpnSubscription[]>([])
+    subscriptionsRef.current = subscriptions
+
     const [logs, setLogs] = useState<ConnectionLog[]>([])
     const [settings, setSettings] = useState<AppSettings>(createDefaultSettings())
 
@@ -137,6 +147,11 @@ export function VpnProvider({ children }: VpnProviderProps) {
             window.electronAPI.onTrayDisconnect(() => {
                 disconnect()
             })
+
+            window.electronAPI.onPingResult?.((res) => {
+                setProfiles(prev => prev.map(p => p.id === res.profileId ? { ...p, ping: res.latency, pingMode: res.mode as any } : p))
+                setTestingProfileIds(prev => prev.filter(id => id !== res.profileId))
+            })
         }
     }, [])
 
@@ -198,10 +213,12 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setCurrentProfile(profile)
     }, [])
 
-    const refreshSubscription = useCallback(async (id: string) => {
+    const refreshSubscription = useCallback(async (id: string, directSub?: VpnSubscription) => {
         if (!window.electronAPI) return
-        const sub = subscriptions.find(s => s.id === id)
+        const sub = directSub || subscriptionsRef.current.find(s => s.id === id)
         if (!sub) return
+
+        setRefreshingSubIds(prev => prev.includes(id) ? prev : [...prev, id])
 
         try {
             const res = await window.electronAPI.fetchSubscription(sub.url)
@@ -211,7 +228,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
             const parsed = parseSubscriptionData(res.content!, res.headers!, sub.url)
 
             // Update sub stats
-            const updatedSub = {
+            const updatedSub: VpnSubscription = {
                 ...sub,
                 name: parsed.name || sub.name,
                 upload: parsed.upload,
@@ -220,7 +237,14 @@ export function VpnProvider({ children }: VpnProviderProps) {
                 expire: parsed.expire,
                 lastUpdated: Date.now()
             }
-            setSubscriptions(prev => prev.map(s => s.id === id ? updatedSub : s))
+            setSubscriptions(prev => {
+                const exists = prev.some(s => s.id === id)
+                if (exists) {
+                    return prev.map(s => s.id === id ? updatedSub : s)
+                } else {
+                    return [...prev, updatedSub]
+                }
+            })
 
             // Replace profiles
             setProfiles(prev => {
@@ -252,13 +276,27 @@ export function VpnProvider({ children }: VpnProviderProps) {
                 level: 'error',
                 message: `Failed to refresh subscription: ${e}`
             })
-            throw e
+        } finally {
+            setRefreshingSubIds(prev => prev.filter(item => item !== id))
         }
-    }, [subscriptions, addLog])
+    }, [addLog])
+
+    // Auto-refresh subscriptions on startup once loaded
+    const initialRefreshDone = useRef(false)
+    useEffect(() => {
+        if (!initialRefreshDone.current && subscriptions.length > 0) {
+            initialRefreshDone.current = true
+            subscriptions.forEach((sub, idx) => {
+                setTimeout(() => {
+                    refreshSubscription(sub.id, sub)
+                }, idx * 300)
+            })
+        }
+    }, [subscriptions, refreshSubscription])
 
     const addSubscription = useCallback(async (url: string) => {
         const id = crypto.randomUUID()
-        const newSub = {
+        const newSub: VpnSubscription = {
             id,
             name: 'New Subscription',
             url,
@@ -270,9 +308,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
             createdAt: Date.now()
         }
         setSubscriptions(prev => [...prev, newSub])
-        
-        // Timeout to allow state to settle
-        setTimeout(() => refreshSubscription(id), 100)
+        await refreshSubscription(id, newSub)
     }, [refreshSubscription])
 
     const updateSubscription = useCallback((sub: VpnSubscription) => {
@@ -284,43 +320,82 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setProfiles(prev => prev.filter(p => p.subscriptionId !== id))
     }, [])
 
-    const testAllPings = useCallback(async () => {
-        if (!window.electronAPI) return
+    const testAllPings = useCallback(async (mode: 'tcp' | 'http' | 'real' = 'tcp') => {
+        if (!window.electronAPI || isTestingPings) return
         
-        // Reset all pings first
-        setProfiles(prev => prev.map(p => ({ ...p, ping: undefined })))
+        setIsTestingPings(true)
+        // Reset all pings first so user sees new results coming in
+        setProfiles(prev => prev.map(p => ({ ...p, ping: undefined, pingMode: undefined })))
         
-        const batchSize = 3
         const targetProfiles = [...profiles]
+
+        if (mode === 'real') {
+            setTestingProfileIds(targetProfiles.map(p => p.id))
+            try {
+                const results = await window.electronAPI.batchRealDelay(targetProfiles)
+                if (results && typeof results === 'object') {
+                    setProfiles(prev => prev.map(p => {
+                        const latency = results[p.id]
+                        if (latency !== undefined) {
+                            return { ...p, ping: latency, pingMode: 'real' }
+                        }
+                        return p
+                    }))
+                }
+            } catch (e) {
+                console.error('Batch real delay error:', e)
+            } finally {
+                setTestingProfileIds([])
+                setIsTestingPings(false)
+            }
+            return
+        }
+
+        const batchSize = 10
 
         for (let i = 0; i < targetProfiles.length; i += batchSize) {
             const batch = targetProfiles.slice(i, i + batchSize)
+            setTestingProfileIds(batch.map(p => p.id))
+
             await Promise.all(batch.map(async profile => {
                 let finalLatency = -1
                 try {
-                    // Try Real Delay first (like Android)
-                    if (['vless', 'vmess', 'trojan', 'shadowsocks'].includes(profile.protocol)) {
-                        const realResult = await window.electronAPI.testProfileRealDelay(profile)
-                        if (realResult.success && realResult.latency > 0) {
-                            finalLatency = realResult.latency
+                    if (mode === 'tcp') {
+                        // Direct TCP handshake ping to serverAddress:port
+                        if (profile.serverAddress && profile.port) {
+                            const res = await window.electronAPI.tcpPing(profile.serverAddress, profile.port)
+                            if (res.success && res.latency > 0) {
+                                finalLatency = res.latency
+                            }
                         }
-                    }
-                    
-                    // Fallback to TCP ping if real delay failed
-                    if (finalLatency <= 0 && profile.serverAddress && profile.port) {
-                        const tcpResult = await window.electronAPI.tcpPing(profile.serverAddress, profile.port)
-                        if (tcpResult.success && tcpResult.latency > 0) {
-                            finalLatency = tcpResult.latency
+                    } else if (mode === 'http') {
+                        // Direct HTTP/HTTPS ping to serverAddress:port
+                        if (profile.serverAddress && profile.port) {
+                            const isTls = profile.singboxConfig?.security === 'tls' || 
+                                          profile.singboxConfig?.security === 'reality' || 
+                                          profile.port === 443
+                            const sni = profile.singboxConfig?.sni || profile.serverAddress
+                            const res = await window.electronAPI.httpPing(profile.serverAddress, profile.port, isTls, sni)
+                            if (res.success && res.latency > 0) {
+                                finalLatency = res.latency
+                            }
                         }
                     }
                 } catch (e) {
-                    // Keep -1
+                    finalLatency = -1
                 }
                 
-                setProfiles(prev => prev.map(p => p.id === profile.id ? { ...p, ping: finalLatency } : p))
+                setProfiles(prev => prev.map(p => p.id === profile.id ? { ...p, ping: finalLatency, pingMode: mode } : p))
             }))
         }
-    }, [profiles])
+
+        setTestingProfileIds([])
+        setIsTestingPings(false)
+    }, [profiles, isTestingPings])
+
+    const clearPings = useCallback(() => {
+        setProfiles(prev => prev.map(p => ({ ...p, ping: undefined, pingMode: undefined })))
+    }, [])
 
     const connect = useCallback(async () => {
         if (!currentProfile) return
@@ -510,9 +585,13 @@ export function VpnProvider({ children }: VpnProviderProps) {
         updateSubscription,
         deleteSubscription,
         refreshSubscription,
+        refreshingSubIds,
         connect,
         disconnect,
         testAllPings,
+        clearPings,
+        isTestingPings,
+        testingProfileIds,
         logs,
         addLog,
         clearLogs,
@@ -532,9 +611,13 @@ export function VpnProvider({ children }: VpnProviderProps) {
         updateSubscription,
         deleteSubscription,
         refreshSubscription,
+        refreshingSubIds,
         connect,
         disconnect,
         testAllPings,
+        clearPings,
+        isTestingPings,
+        testingProfileIds,
         logs,
         addLog,
         clearLogs,

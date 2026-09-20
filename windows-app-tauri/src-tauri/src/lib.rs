@@ -83,7 +83,9 @@ pub fn run() {
             singbox_test_latency,
             singbox_test_server_ping,
             tcp_ping,
+            http_ping,
             singbox_test_profile_real_delay,
+            singbox_batch_real_delay,
             subscription_fetch,
         ])
         .run(tauri::generate_context!())

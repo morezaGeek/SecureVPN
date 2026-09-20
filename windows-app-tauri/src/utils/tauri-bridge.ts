@@ -51,8 +51,14 @@ export function setupTauriBridge() {
         tcpPing: async (host: string, port: number) => {
             return await invoke('tcp_ping', { host, port })
         },
-        testProfileRealDelay: async (profile: any) => {
-            return await invoke('singbox_test_profile_real_delay', { profile })
+        httpPing: async (host: string, port: number, tls?: boolean, sni?: string) => {
+            return await invoke('http_ping', { host, port, tls, sni })
+        },
+        testProfileRealDelay: async (profile: any, testUrl?: string) => {
+            return await invoke('singbox_test_profile_real_delay', { profile, testUrl })
+        },
+        batchRealDelay: async (profiles: any[], testUrl?: string) => {
+            return await invoke('singbox_batch_real_delay', { profiles, testUrl })
         },
         showSaveDialog: async (options: any) => {
             try {
@@ -106,6 +112,9 @@ export function setupTauriBridge() {
         },
         onVpnLog: (callback: (log: any) => void) => {
             listen('vpn:log', (event: any) => callback(event.payload))
+        },
+        onPingResult: (callback: (result: any) => void) => {
+            listen('vpn:pingResult', (event: any) => callback(event.payload))
         },
         onTrayConnect: (callback: () => void) => {
             listen('tray:connect', () => callback())

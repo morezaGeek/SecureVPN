@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useVpn } from '../context/VpnContext'
 import { VpnProfile, VpnProtocol, AuthType, PROTOCOL_INFO, createDefaultProfile, SingboxTransport, SingboxSecurity } from '../types'
-import { Plus, Globe, Edit2, Trash2, X, Check, Download, Upload, Clipboard, RefreshCw, Link as LinkIcon, Database, Activity } from 'lucide-react'
+import { Plus, Globe, Edit2, Trash2, X, Check, Download, Upload, Clipboard, RefreshCw, Link as LinkIcon, Database, Activity, Play, RotateCcw } from 'lucide-react'
 import { parseShareLink } from '../utils/linkParser'
 
 // Convert 2-letter country code to flag CDN url
@@ -29,7 +29,33 @@ function extractCountryCode(name: string): string {
 }
 
 export default function ProfilesScreen() {
-    const { profiles, currentProfile, addProfile, updateProfile, deleteProfile, selectProfile, subscriptions, addSubscription, deleteSubscription, refreshSubscription, testAllPings, testAllRealDelays } = useVpn()
+    const { 
+        profiles, 
+        currentProfile, 
+        addProfile, 
+        updateProfile, 
+        deleteProfile, 
+        selectProfile, 
+        subscriptions, 
+        addSubscription, 
+        deleteSubscription, 
+        refreshSubscription, 
+        refreshingSubIds,
+        testAllPings, 
+        clearPings,
+        isTestingPings, 
+        testingProfileIds 
+    } = useVpn()
+    const [pingMode, setPingMode] = useState<'tcp' | 'http' | 'real'>(() => {
+        const saved = localStorage.getItem('vpn-ping-mode')
+        if (saved === 'real' || saved === 'http' || saved === 'tcp') return saved
+        return 'real'
+    })
+
+    useEffect(() => {
+        localStorage.setItem('vpn-ping-mode', pingMode)
+    }, [pingMode])
+
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [editingProfile, setEditingProfile] = useState<VpnProfile | null>(null)
     const [formData, setFormData] = useState<VpnProfile>(createDefaultProfile())
@@ -243,10 +269,6 @@ export default function ProfilesScreen() {
                         <Upload size={18} />
                         Export
                     </button>
-                    <button className="btn btn-secondary" onClick={testAllPings} title="Test Ping for all configurations">
-                        <Activity size={18} />
-                        Ping
-                    </button>
                     <button className="btn btn-primary" onClick={openAddModal}>
                         <Plus size={18} />
                         Add Profile
@@ -311,8 +333,13 @@ export default function ProfilesScreen() {
                                         </div>
                                     )}
                                 </div>
-                                <button className="title-bar-button" onClick={() => refreshSubscription(sub.id)} title="Refresh">
-                                    <RefreshCw size={16} />
+                                <button 
+                                    className="title-bar-button" 
+                                    onClick={() => refreshSubscription(sub.id)} 
+                                    title="Refresh"
+                                    disabled={refreshingSubIds?.includes(sub.id)}
+                                >
+                                    <RefreshCw size={16} className={refreshingSubIds?.includes(sub.id) ? 'spin-animation' : ''} />
                                 </button>
                                 <button className="title-bar-button" onClick={() => deleteSubscription(sub.id)} title="Delete">
                                     <Trash2 size={16} />
@@ -323,8 +350,68 @@ export default function ProfilesScreen() {
                 </div>
             )}
 
-            <div className="card-header" style={{ marginTop: 'var(--spacing-lg)' }}>
-                <h3 className="card-title" style={{ fontSize: '1.1rem' }}>Servers</h3>
+            <div className="card-header" style={{ marginTop: 'var(--spacing-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 className="card-title" style={{ fontSize: '1.1rem' }}>
+                    Servers {profiles.length > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400 }}>({profiles.length})</span>}
+                </h3>
+
+                {profiles.length > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {/* Segmented control: [TCP] [HTTP] [Real delay] */}
+                        <div className="ping-mode-group">
+                            <button 
+                                type="button" 
+                                className={`ping-mode-btn ${pingMode === 'tcp' ? 'active' : ''}`}
+                                onClick={() => setPingMode('tcp')}
+                                title="Direct TCP latency (TCPing - V2rayN default)"
+                            >
+                                TCP
+                            </button>
+                            <button 
+                                type="button" 
+                                className={`ping-mode-btn ${pingMode === 'http' ? 'active' : ''}`}
+                                onClick={() => setPingMode('http')}
+                                title="Direct HTTP/HTTPS latency"
+                            >
+                                HTTP
+                            </button>
+                            <button 
+                                type="button" 
+                                className={`ping-mode-btn ${pingMode === 'real' ? 'active' : ''}`}
+                                onClick={() => setPingMode('real')}
+                                title="Real delay through proxy tunnel via Google (V2rayN method)"
+                            >
+                                Real delay
+                            </button>
+                        </div>
+
+                        {/* Test all button */}
+                        <button 
+                            className="btn btn-primary" 
+                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 14px', fontSize: '0.85rem' }}
+                            onClick={() => testAllPings(pingMode)} 
+                            disabled={isTestingPings || profiles.length === 0}
+                            title={`Test all servers using ${pingMode.toUpperCase()}`}
+                        >
+                            {isTestingPings ? (
+                                <RefreshCw size={14} className="spin-animation" />
+                            ) : (
+                                <Play size={14} fill="currentColor" />
+                            )}
+                            {isTestingPings ? 'Testing...' : 'Test all'}
+                        </button>
+
+                        {/* Clear / Reset button */}
+                        <button 
+                            className="title-bar-button" 
+                            style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '5px', height: '30px', width: '30px' }}
+                            onClick={clearPings} 
+                            title="Clear all ping results"
+                        >
+                            <RotateCcw size={14} />
+                        </button>
+                    </div>
+                )}
             </div>
 
             {profiles.length === 0 ? (
@@ -361,15 +448,25 @@ export default function ProfilesScreen() {
                                 <div className="profile-name">{profile.name}</div>
                                 <div className="profile-server">
                                     {profile.serverAddress}:{profile.port}
-                                    {profile.ping !== undefined && (
+                                    {testingProfileIds?.includes(profile.id) ? (
                                         <span style={{ 
                                             marginLeft: '8px', 
                                             fontSize: '0.85em', 
-                                            color: profile.ping > 0 ? (profile.ping < 200 ? 'var(--success)' : 'var(--warning)') : 'var(--danger)'
+                                            color: 'var(--warning)',
+                                            fontWeight: 500
                                         }}>
-                                            Ping: {profile.ping > 0 ? `${profile.ping}ms` : 'Timeout'}
+                                            Testing...
                                         </span>
-                                    )}
+                                    ) : profile.ping !== undefined ? (
+                                        <span style={{ 
+                                            marginLeft: '8px', 
+                                            fontSize: '0.85em', 
+                                            color: profile.ping > 0 ? (profile.ping < 200 ? 'var(--success)' : 'var(--warning)') : 'var(--danger)',
+                                            fontWeight: 500
+                                        }}>
+                                            {profile.ping > 0 ? `${profile.ping}ms` : 'Timeout'}
+                                        </span>
+                                    ) : null}
                                 </div>
                             </div>
                             <span className="profile-protocol">

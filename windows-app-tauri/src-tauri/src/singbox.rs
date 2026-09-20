@@ -63,7 +63,11 @@ pub async fn resolve_hostname_to_ip(host: &str) -> String {
     host.to_string()
 }
 
-pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result<(), String> {
+pub async fn build_singbox_outbound(profile: &Value) -> Result<(String, String, Value), String> {
+    build_singbox_outbound_with_tag(profile, "proxy").await
+}
+
+pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Result<(String, String, Value), String> {
     let protocol = profile.get("protocol").and_then(|v| v.as_str()).unwrap_or("vless");
     let raw_server_address = profile.get("serverAddress").and_then(|v| v.as_str()).unwrap_or("127.0.0.1");
     let port = profile.get("port").and_then(|v| v.as_u64()).unwrap_or(443);
@@ -83,7 +87,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         "vless" => {
             let mut o = json!({
                 "type": "vless",
-                "tag": "proxy",
+                "tag": tag,
                 "server": server_ip,
                 "server_port": port,
                 "uuid": uuid
@@ -96,7 +100,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         "vmess" => {
             let mut o = json!({
                 "type": "vmess",
-                "tag": "proxy",
+                "tag": tag,
                 "server": server_ip,
                 "server_port": port,
                 "uuid": uuid,
@@ -110,14 +114,14 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         }
         "trojan" => json!({
             "type": "trojan",
-            "tag": "proxy",
+            "tag": tag,
             "server": server_ip,
             "server_port": port,
             "password": uuid
         }),
         "shadowsocks" => json!({
             "type": "shadowsocks",
-            "tag": "proxy",
+            "tag": tag,
             "server": server_ip,
             "server_port": port,
             "password": uuid,
@@ -193,6 +197,129 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
             "service_name": singbox_cfg.get("serviceName").and_then(|v| v.as_str()).unwrap_or("")
         });
     }
+
+    Ok((raw_server_address.to_string(), server_ip, outbound))
+}
+
+pub async fn build_singbox_batch_test_config(
+    profiles: &[Value],
+    config_path: &Path,
+    clash_api_port: u16,
+) -> Result<Vec<(String, String)>, String> {
+    let mut outbounds = Vec::new();
+    let mut tag_map = Vec::new();
+    let mut direct_rules = Vec::new();
+
+    for (i, p) in profiles.iter().enumerate() {
+        let protocol = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
+        if !["vless", "vmess", "trojan", "shadowsocks"].contains(&protocol) {
+            continue;
+        }
+
+        let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let tag = format!("proxy-{}", i);
+
+        match build_singbox_outbound_with_tag(p, &tag).await {
+            Ok((raw_addr, server_ip, outbound)) => {
+                direct_rules.push(json!({ "domain": [raw_addr], "outbound": "direct" }));
+                if server_ip.parse::<std::net::IpAddr>().is_ok() {
+                    direct_rules.push(json!({ "ip_cidr": [format!("{}/32", server_ip)], "outbound": "direct" }));
+                }
+                outbounds.push(outbound);
+                tag_map.push((id, tag));
+            }
+            Err(e) => {
+                eprintln!("[BatchTestConfig] Failed to build outbound for profile {}: {}", id, e);
+            }
+        }
+    }
+
+    if outbounds.is_empty() {
+        return Err("No valid sing-box profiles to test".into());
+    }
+
+    outbounds.push(json!({ "type": "direct", "tag": "direct" }));
+
+    let full_config = json!({
+        "log": {
+            "level": "warn",
+            "timestamp": true
+        },
+        "dns": {
+            "servers": [
+                {
+                    "type": "local",
+                    "tag": "direct-dns"
+                }
+            ],
+            "strategy": "ipv4_only"
+        },
+        "inbounds": [
+            {
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": clash_api_port + 100
+            }
+        ],
+        "outbounds": outbounds,
+        "route": {
+            "default_domain_resolver": "direct-dns",
+            "rules": direct_rules,
+            "final": "direct"
+        },
+        "experimental": {
+            "clash_api": {
+                "external_controller": format!("127.0.0.1:{}", clash_api_port)
+            }
+        }
+    });
+
+    let config_str = serde_json::to_string_pretty(&full_config).map_err(|e| e.to_string())?;
+    std::fs::write(config_path, config_str).map_err(|e| e.to_string())?;
+    Ok(tag_map)
+}
+
+#[allow(dead_code)]
+pub async fn build_singbox_test_config(profile: &Value, config_path: &Path) -> Result<(), String> {
+    let (raw_server_address, server_ip, outbound) = build_singbox_outbound(profile).await?;
+
+    let full_config = json!({
+        "log": {
+            "level": "error",
+            "timestamp": true
+        },
+        "dns": {
+            "servers": [
+                {
+                    "type": "local",
+                    "tag": "direct-dns"
+                }
+            ],
+            "strategy": "ipv4_only"
+        },
+        "outbounds": [
+            outbound,
+            { "type": "direct", "tag": "direct" }
+        ],
+        "route": {
+            "default_domain_resolver": "direct-dns",
+            "rules": [
+                { "domain": [raw_server_address], "outbound": "direct" },
+                { "ip_cidr": [format!("{}/32", server_ip)], "outbound": "direct" }
+            ],
+            "final": "proxy"
+        }
+    });
+
+    let config_str = serde_json::to_string_pretty(&full_config).map_err(|e| e.to_string())?;
+    std::fs::write(config_path, config_str).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result<(), String> {
+    let (raw_server_address, server_ip, outbound) = build_singbox_outbound(profile).await?;
+    let singbox_cfg = profile.get("singboxConfig").cloned().unwrap_or(json!({}));
 
     let bypass_private_ips = profile.get("bypassPrivateIps").and_then(|v| v.as_bool())
         .or_else(|| singbox_cfg.get("bypassPrivateIps").and_then(|v| v.as_bool()))

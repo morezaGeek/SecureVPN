@@ -1188,8 +1188,12 @@ body {
 .text-center { text-align: center; }
 .text-muted { color: var(--text-muted); }
 
-.spin {
+.spin, .spin-animation {
   animation: spin 1s linear infinite;
+}
+
+@keyframes material-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Initial loading screen styles */
@@ -1220,3 +1224,42 @@ body {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Ping Mode Segmented Control */
+.ping-mode-group {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.ping-mode-btn {
+  padding: 5px 14px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  line-height: 1.4;
+  outline: none;
+}
+
+.ping-mode-btn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.ping-mode-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.ping-mode-btn.active {
+  background: #0d6efd;
+  color: #ffffff;
+  font-weight: 600;
+}
+

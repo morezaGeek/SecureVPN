@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::sync::Mutex;
 
 use crate::openconnect::{spawn_openconnect, cleanup_openconnect_routes, resolve_host_to_ip};
-use crate::singbox::{build_singbox_config, run_tcp_ping, spawn_singbox};
+use crate::singbox::{build_singbox_batch_test_config, build_singbox_config, run_tcp_ping, spawn_singbox};
 use crate::state::{VpnState, VpnStats};
 
 pub struct AppState {
@@ -521,6 +521,55 @@ pub async fn tcp_ping(host: String, port: u16) -> Result<Value, String> {
 }
 
 #[tauri::command]
+pub async fn http_ping(host: String, port: u16, tls: Option<bool>, sni: Option<String>) -> Result<Value, String> {
+    let host_clone = host.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let is_tls = tls.unwrap_or(port == 443);
+        let scheme = if is_tls { "https" } else { "http" };
+        let req_host = sni.as_deref().filter(|s| !s.is_empty()).unwrap_or(&host);
+        let url = format!("{}://{}:{}/", scheme, req_host, port);
+        let start = std::time::Instant::now();
+        
+        let res = ureq::head(&url)
+            .timeout(std::time::Duration::from_millis(2000))
+            .call();
+
+        match res {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => {
+                let ms = start.elapsed().as_millis() as i64;
+                Ok(ms)
+            }
+            Err(_) => {
+                let get_res = ureq::get(&url)
+                    .timeout(std::time::Duration::from_millis(1500))
+                    .call();
+
+                match get_res {
+                    Ok(_) | Err(ureq::Error::Status(_, _)) => {
+                        let ms = start.elapsed().as_millis() as i64;
+                        Ok(ms)
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    match res {
+        Ok(ms) => Ok(json!({ "success": true, "latency": ms })),
+        Err(_) => {
+            // Fallback to TCP ping if HTTP protocol probe was dropped/refused
+            match run_tcp_ping(host_clone, port).await {
+                Ok(ms) => Ok(json!({ "success": true, "latency": ms })),
+                Err(e) => Ok(json!({ "success": false, "latency": -1, "error": e })),
+            }
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn singbox_test_latency() -> Result<Value, String> {
     tokio::task::spawn_blocking(|| {
         let start = std::time::Instant::now();
@@ -546,12 +595,146 @@ pub async fn singbox_test_server_ping() -> Result<Value, String> {
     Ok(json!({ "success": true, "latency": 25 }))
 }
 
-#[tauri::command]
-pub async fn singbox_test_profile_real_delay(profile: Value) -> Result<Value, String> {
-    let server_address = profile.get("serverAddress").and_then(|v| v.as_str()).unwrap_or("");
-    let port = profile.get("port").and_then(|v| v.as_u64()).unwrap_or(443) as u16;
+fn find_available_port(start_port: u16) -> u16 {
+    for port in start_port..start_port + 50 {
+        if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
+            drop(listener);
+            return port;
+        }
+    }
+    start_port
+}
 
-    tcp_ping(server_address.to_string(), port).await
+#[tauri::command]
+pub async fn singbox_batch_real_delay(
+    app: AppHandle,
+    profiles: Vec<Value>,
+    test_url: Option<String>,
+) -> Result<HashMap<String, i64>, String> {
+    let mut results: HashMap<String, i64> = HashMap::new();
+    let mut sb_profiles = Vec::new();
+
+    // Handle OpenConnect profiles via direct TCP ping
+    for p in &profiles {
+        let protocol = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
+        let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if protocol == "openconnect" {
+            let host = p.get("serverAddress").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let port = p.get("port").and_then(|v| v.as_u64()).unwrap_or(443) as u16;
+            let latency = match run_tcp_ping(host, port).await {
+                Ok(ms) => ms,
+                Err(_) => -1,
+            };
+            results.insert(id.clone(), latency);
+            let _ = app.emit("vpn:pingResult", json!({
+                "profileId": id,
+                "latency": latency,
+                "mode": "real"
+            }));
+        } else if ["vless", "vmess", "trojan", "shadowsocks"].contains(&protocol) {
+            sb_profiles.push(p.clone());
+        }
+    }
+
+    if sb_profiles.is_empty() {
+        return Ok(results);
+    }
+
+    let bin_path = resolve_binary(&app, "singbox/sing-box.exe")?;
+    let temp_dir = std::env::temp_dir();
+    let unique_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let config_path = temp_dir.join(format!("sb-batch-{}.json", unique_id));
+
+    let clash_port = find_available_port(9092);
+    let tag_map = build_singbox_batch_test_config(&sb_profiles, &config_path, clash_port).await?;
+
+    #[cfg(windows)]
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut cmd = tokio::process::Command::new(&bin_path);
+    cmd.args(["run", "-c", config_path.to_str().unwrap_or("")])
+       .stdout(std::process::Stdio::null())
+       .stderr(std::process::Stdio::null());
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn sing-box test runner: {}", e))?;
+
+    // Wait for Clash API to become ready (up to 2.5s)
+    let check_url = format!("http://127.0.0.1:{}/proxies", clash_port);
+    let mut ready = false;
+    for _ in 0..25 {
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let is_up = tokio::task::spawn_blocking({
+            let url = check_url.clone();
+            move || ureq::get(&url).timeout(std::time::Duration::from_millis(150)).call().is_ok()
+        }).await.unwrap_or(false);
+        if is_up {
+            ready = true;
+            break;
+        }
+    }
+
+    if !ready {
+        let _ = child.kill().await;
+        let _ = std::fs::remove_file(&config_path);
+        return Err("sing-box test runner failed to start Clash API".into());
+    }
+
+    let target_url = test_url.unwrap_or_else(|| "http://www.gstatic.com/generate_204".to_string());
+    let chunks: Vec<Vec<(String, String)>> = tag_map.chunks(6).map(|c| c.to_vec()).collect();
+
+    for chunk in chunks {
+        let mut tasks = Vec::new();
+        for (profile_id, tag) in chunk {
+            let delay_url = format!(
+                "http://127.0.0.1:{}/proxies/{}/delay?url={}&timeout=3000",
+                clash_port, tag, target_url
+            );
+            tasks.push(tokio::task::spawn_blocking(move || {
+                let res = ureq::get(&delay_url)
+                    .timeout(std::time::Duration::from_millis(3500))
+                    .call();
+                match res {
+                    Ok(r) if r.status() == 200 => {
+                        let val: Value = r.into_json().unwrap_or(json!({}));
+                        let delay = val.get("delay").and_then(|v| v.as_i64()).unwrap_or(-1);
+                        (profile_id, delay)
+                    }
+                    _ => (profile_id, -1),
+                }
+            }));
+        }
+
+        for task in tasks {
+            if let Ok((profile_id, latency)) = task.await {
+                results.insert(profile_id.clone(), latency);
+                let _ = app.emit("vpn:pingResult", json!({
+                    "profileId": profile_id,
+                    "latency": latency,
+                    "mode": "real"
+                }));
+            }
+        }
+    }
+
+    let _ = child.kill().await;
+    let _ = std::fs::remove_file(&config_path);
+
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn singbox_test_profile_real_delay(app: AppHandle, profile: Value, test_url: Option<String>) -> Result<Value, String> {
+    let id = profile.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let batch_res = singbox_batch_real_delay(app, vec![profile], test_url).await?;
+    let latency = batch_res.get(&id).copied().unwrap_or(-1);
+    if latency > 0 {
+        Ok(json!({ "success": true, "latency": latency }))
+    } else {
+        Ok(json!({ "success": false, "latency": -1, "error": "Timeout or connection failed" }))
+    }
 }
 
 #[tauri::command]

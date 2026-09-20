@@ -91,6 +91,7 @@ export interface VpnProfile {
     lastConnected?: number
     createdAt: number
     ping?: number
+    pingMode?: 'tcp' | 'http' | 'real'
     realDelay?: number
 }
 

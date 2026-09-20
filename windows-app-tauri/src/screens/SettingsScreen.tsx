@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useVpn } from '../context/VpnContext'
 import { useTheme } from '../context/ThemeContext'
-import { Sun, Moon, Bell, Shield, Globe, Network, Check, Save } from 'lucide-react'
+import { Sun, Moon, Bell, Shield, Globe, Network, Check, Save, Github, ExternalLink } from 'lucide-react'
 import packageJson from '../../package.json'
 
 export default function SettingsScreen() {
@@ -351,6 +351,18 @@ export default function SettingsScreen() {
                             Secure VPN
                         </h3>
                         <p style={{ color: 'var(--text-secondary)' }}>Version {packageJson.version}</p>
+                        <div style={{ marginTop: 'var(--spacing-md)' }}>
+                            <button
+                                className="btn btn-secondary"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', padding: '7px 16px', borderRadius: '6px' }}
+                                onClick={() => window.electronAPI?.openExternal?.('https://github.com/morezaGeek/SecureVPN/releases')}
+                                title="Open GitHub Releases"
+                            >
+                                <Github size={16} />
+                                <span>Check for Updates (GitHub)</span>
+                                <ExternalLink size={13} style={{ opacity: 0.6 }} />
+                            </button>
+                        </div>
                         <p style={{ color: 'var(--text-muted)', marginTop: 'var(--spacing-md)', fontSize: 13 }}>
                             A premium VPN client for Windows with support for<br />
                             OpenConnect, V2Ray (VLESS/VMess), and SoftEther protocols.

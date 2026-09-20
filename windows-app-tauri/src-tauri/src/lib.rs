@@ -6,9 +6,9 @@ mod state;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 use crate::commands::*;
@@ -32,16 +32,35 @@ pub fn run() {
             // Ensure system proxy is cleared on startup
             commands::set_system_proxy(false, None);
 
-            // Build Tray Menu
+            // Build Initial Tray Menu
+            let start_item = MenuItem::with_id(app, "start_vpn", "Start VPN", true, None::<&str>)?;
+            let stop_item = MenuItem::with_id(app, "stop_vpn", "Stop VPN", false, None::<&str>)?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let empty_profile = MenuItem::with_id(app, "no_profiles", "No profiles configured", false, None::<&str>)?;
+            let empty_profile_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&empty_profile];
+            let connect_submenu = Submenu::with_items(app, "Connect", true, &empty_profile_refs)?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
             let show_item = MenuItem::with_id(app, "show", "Show Secure VPN", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            let tray_menu = Menu::with_items(
+                app,
+                &[
+                    &start_item,
+                    &stop_item,
+                    &sep1,
+                    &connect_submenu,
+                    &sep2,
+                    &show_item,
+                    &quit_item,
+                ],
+            )?;
 
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-light.png"))
                 .or_else(|_| tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")))
                 .ok();
 
-            let mut tray_builder = TrayIconBuilder::new()
+            let mut tray_builder = TrayIconBuilder::with_id("main-tray")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false);
 
@@ -55,6 +74,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -63,15 +83,36 @@ pub fn run() {
                         commands::set_system_proxy(false, None);
                         app.exit(0);
                     }
+                    "start_vpn" => {
+                        let _ = app.emit("tray:connect", ());
+                    }
+                    "stop_vpn" => {
+                        let _ = app.emit("tray:disconnect", ());
+                    }
+                    id if id.starts_with("profile:") => {
+                        let profile_id = id.trim_start_matches("profile:").to_string();
+                        let _ = app.emit("tray:selectProfile", profile_id);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                    match event {
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } | TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        } => {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
+                        _ => {}
                     }
                 })
                 .build(app)?;
@@ -99,6 +140,8 @@ pub fn run() {
             singbox_test_profile_real_delay,
             singbox_batch_real_delay,
             subscription_fetch,
+            tray_update_menu,
+            open_external_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

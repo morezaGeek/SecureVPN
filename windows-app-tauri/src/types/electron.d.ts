@@ -52,6 +52,9 @@ export interface ElectronAPI {
     onPingResult?: (callback: (result: { profileId: string; latency: number; mode: string }) => void) => void
     onTrayConnect: (callback: () => void) => void
     onTrayDisconnect: (callback: () => void) => void
+    onTraySelectProfile?: (callback: (profileId: string) => void) => void
+    updateTrayMenu?: (profiles: any[], isConnected: boolean, currentProfileId?: string) => Promise<void>
+    openExternal?: (url: string) => Promise<void>
 }
 
 declare global {

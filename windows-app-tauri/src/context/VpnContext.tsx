@@ -23,7 +23,7 @@ interface VpnContextType {
     refreshingSubIds: string[]
 
     // Connection actions
-    connect: () => Promise<void>
+    connect: (overrideProfile?: VpnProfile) => Promise<void>
     disconnect: () => Promise<void>
     testAllPings: (mode?: 'tcp' | 'http' | 'real') => Promise<void>
     testSingleProfile: (profileId: string, mode?: 'tcp' | 'http' | 'real') => Promise<void>
@@ -75,6 +75,15 @@ export function VpnProvider({ children }: VpnProviderProps) {
     const [testingProfileIds, setTestingProfileIds] = useState<string[]>([])
     const subscriptionsRef = useRef<VpnSubscription[]>([])
     subscriptionsRef.current = subscriptions
+
+    const currentProfileRef = useRef<VpnProfile | null>(null)
+    currentProfileRef.current = currentProfile
+
+    const profilesRef = useRef<VpnProfile[]>([])
+    profilesRef.current = profiles
+
+    const connectionStateRef = useRef<ConnectionState>(connectionState)
+    connectionStateRef.current = connectionState
 
     const [logs, setLogs] = useState<ConnectionLog[]>([])
     const [settings, setSettings] = useState<AppSettings>(createDefaultSettings())
@@ -142,11 +151,23 @@ export function VpnProvider({ children }: VpnProviderProps) {
             })
 
             window.electronAPI.onTrayConnect(() => {
-                if (currentProfile) connect()
+                const target = currentProfileRef.current || profilesRef.current[0]
+                if (target) connect(target)
             })
 
             window.electronAPI.onTrayDisconnect(() => {
                 disconnect()
+            })
+
+            window.electronAPI.onTraySelectProfile?.((profileId: string) => {
+                const target = profilesRef.current.find(p => p.id === profileId)
+                if (!target) return
+                if (connectionStateRef.current === 'connected' && currentProfileRef.current?.id === profileId) {
+                    disconnect()
+                } else {
+                    selectProfile(target)
+                    connect(target)
+                }
             })
 
             window.electronAPI.onPingResult?.((res) => {
@@ -155,6 +176,14 @@ export function VpnProvider({ children }: VpnProviderProps) {
             })
         }
     }, [])
+
+    // Sync system tray menu whenever profiles or connection state changes
+    useEffect(() => {
+        if (window.electronAPI?.updateTrayMenu) {
+            const isConnected = connectionState === 'connected'
+            window.electronAPI.updateTrayMenu(profiles, isConnected, currentProfile?.id)
+        }
+    }, [profiles, connectionState, currentProfile])
 
     // Save profiles when changed
     useEffect(() => {
@@ -352,7 +381,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
             return
         }
 
-        const batchSize = 10
+        const batchSize = 4
 
         for (let i = 0; i < targetProfiles.length; i += batchSize) {
             const batch = targetProfiles.slice(i, i + batchSize)
@@ -388,6 +417,9 @@ export function VpnProvider({ children }: VpnProviderProps) {
                 
                 setProfiles(prev => prev.map(p => p.id === profile.id ? { ...p, ping: finalLatency, pingMode: mode } : p))
             }))
+
+            // Add a small pause between batches to prevent congesting the line
+            await new Promise(r => setTimeout(r, 60))
         }
 
         setTestingProfileIds([])
@@ -440,15 +472,21 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setProfiles(prev => prev.map(p => ({ ...p, ping: undefined, pingMode: undefined })))
     }, [])
 
-    const connect = useCallback(async () => {
-        if (!currentProfile) return
+    const connect = useCallback(async (overrideProfile?: VpnProfile) => {
+        const target = overrideProfile || currentProfileRef.current
+        if (!target) return
+
+        if (overrideProfile && overrideProfile.id !== currentProfileRef.current?.id) {
+            setCurrentProfile(overrideProfile)
+            localStorage.setItem('vpn-current-profile', overrideProfile.id)
+        }
 
         setConnectionState('connecting')
         addLog({
-            profileId: currentProfile.id,
-            profileName: currentProfile.name,
+            profileId: target.id,
+            profileName: target.name,
             level: 'info',
-            message: `Connecting to ${currentProfile.serverAddress}...`
+            message: `Connecting to ${target.serverAddress}...`
         })
 
         try {
@@ -456,13 +494,13 @@ export function VpnProvider({ children }: VpnProviderProps) {
                 // Use settings as the single authoritative source for split tunneling
                 const isBypassActive = settings.bypassIranRoutes === true
                 const enrichedProfile = {
-                    ...currentProfile,
+                    ...target,
                     bypassIranRoutes: isBypassActive,
                     bypassPrivateIps: isBypassActive,
                     bypassDomains: settings.bypassDomains || [],
                     bypassIps: settings.bypassIps || [],
-                    singboxConfig: currentProfile.singboxConfig ? {
-                        ...currentProfile.singboxConfig,
+                    singboxConfig: target.singboxConfig ? {
+                        ...target.singboxConfig,
                         mtu: settings.mtuSize, // Pass MTU from app settings
                         tunStack: settings.tunStack, // Pass TUN Stack from app settings
                         bypassIranRoutes: isBypassActive,
@@ -488,24 +526,24 @@ export function VpnProvider({ children }: VpnProviderProps) {
             }
 
             addLog({
-                profileId: currentProfile.id,
-                profileName: currentProfile.name,
+                profileId: target.id,
+                profileName: target.name,
                 level: 'success',
                 message: 'Connected successfully'
             })
 
             // Update last connected
-            updateProfile({ ...currentProfile, lastConnected: Date.now() })
+            updateProfile({ ...target, lastConnected: Date.now() })
         } catch (error) {
             setConnectionState('error')
             addLog({
-                profileId: currentProfile.id,
-                profileName: currentProfile.name,
+                profileId: target.id,
+                profileName: target.name,
                 level: 'error',
                 message: `Connection failed: ${error}`
             })
         }
-    }, [currentProfile, updateProfile, settings])
+    }, [updateProfile, settings, addLog])
 
     const disconnect = useCallback(async () => {
         setConnectionState('disconnecting')

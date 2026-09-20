@@ -63,13 +63,37 @@ pub async fn resolve_hostname_to_ip(host: &str) -> String {
     host.to_string()
 }
 
+fn unescape_percent_encoding(s: &str) -> String {
+    let mut res = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(val) = u8::from_str_radix(hex, 16) {
+                    res.push(val as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        res.push(bytes[i] as char);
+        i += 1;
+    }
+    res
+}
+
 pub async fn build_singbox_outbound(profile: &Value) -> Result<(String, String, Value), String> {
     build_singbox_outbound_with_tag(profile, "proxy").await
 }
 
 pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Result<(String, String, Value), String> {
     let protocol = profile.get("protocol").and_then(|v| v.as_str()).unwrap_or("vless");
-    let raw_server_address = profile.get("serverAddress").and_then(|v| v.as_str()).unwrap_or("127.0.0.1");
+    let raw_server_address = profile.get("serverAddress")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("127.0.0.1");
     let port = profile.get("port").and_then(|v| v.as_u64()).unwrap_or(443);
     let singbox_cfg = profile.get("singboxConfig").cloned().unwrap_or(json!({}));
 
@@ -79,7 +103,19 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
     let uuid = singbox_cfg.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
     let transport = singbox_cfg.get("transport").and_then(|v| v.as_str()).unwrap_or("tcp");
     let security = singbox_cfg.get("security").and_then(|v| v.as_str()).unwrap_or("none");
-    let sni = singbox_cfg.get("sni").and_then(|v| v.as_str()).unwrap_or(raw_server_address);
+    let configured_sni = singbox_cfg.get("sni")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let configured_host = singbox_cfg.get("host")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let default_domain = configured_sni
+        .or(configured_host)
+        .unwrap_or(raw_server_address);
+    let sni = configured_sni.unwrap_or(default_domain);
+    let host = configured_host.unwrap_or(default_domain);
     let fingerprint = singbox_cfg.get("fingerprint").and_then(|v| v.as_str()).unwrap_or("chrome");
 
     // Build outbound based on protocol
@@ -144,15 +180,28 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
         if security == "tls" {
             let custom_alpn: Option<Vec<String>> = singbox_cfg.get("alpn")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .map(|arr| arr.iter().filter_map(|x| {
+                    let s = x.as_str().map(|s| s.trim()).unwrap_or("");
+                    if !s.is_empty() { Some(s.to_string()) } else { None }
+                }).collect())
                 .filter(|v: &Vec<String>| !v.is_empty());
 
-            let alpn = if let Some(custom) = custom_alpn {
-                custom
-            } else if transport == "ws" || transport == "httpupgrade" {
-                vec!["h2".to_string(), "http/1.1".to_string()]
+            let alpn = if transport == "ws" || transport == "httpupgrade" {
+                // WebSocket and HttpUpgrade MUST negotiate HTTP/1.1!
+                // Reverse proxies / CDNs (especially Cloudflare) reject or reset WebSocket if HTTP/2 is negotiated.
+                if let Some(custom) = custom_alpn {
+                    if custom.iter().any(|p| p == "http/1.1") {
+                        custom
+                    } else {
+                        vec!["http/1.1".to_string()]
+                    }
+                } else {
+                    vec!["http/1.1".to_string()]
+                }
             } else if transport == "xhttp" || transport == "grpc" {
-                vec!["h2".to_string()]
+                custom_alpn.unwrap_or_else(|| vec!["h2".to_string()])
+            } else if let Some(custom) = custom_alpn {
+                custom
             } else {
                 vec!["h2".to_string(), "http/1.1".to_string()]
             };
@@ -169,33 +218,107 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
             }
         }
 
+        if singbox_cfg.get("insecure").and_then(|v| v.as_bool()).unwrap_or(false)
+            || singbox_cfg.get("allowInsecure").and_then(|v| v.as_bool()).unwrap_or(false) {
+            tls_obj["insecure"] = json!(true);
+        }
+
         outbound["tls"] = tls_obj;
     }
 
     // Transport config
-    let host = singbox_cfg.get("host").and_then(|v| v.as_str()).unwrap_or(sni);
-
     if transport == "ws" {
-        outbound["transport"] = json!({
+        let raw_path = singbox_cfg.get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("/");
+
+        let unescaped = unescape_percent_encoding(raw_path);
+        let mut final_path = if unescaped.starts_with('/') { unescaped } else { format!("/{}", unescaped) };
+
+        let mut max_early_data: Option<u32> = None;
+        let mut early_data_header_name: Option<String> = None;
+
+        // Parse ed=(\d+)
+        if let Ok(re_ed) = regex::Regex::new(r"[?&]ed=(\d+)") {
+            if let Some(caps) = re_ed.captures(&final_path) {
+                if let Some(m) = caps.get(1) {
+                    if let Ok(val) = m.as_str().parse::<u32>() {
+                        if val > 0 {
+                            max_early_data = Some(val);
+                            early_data_header_name = Some("Sec-WebSocket-Protocol".to_string());
+                        }
+                    }
+                }
+                let cleaned = re_ed.replace_all(&final_path, "").to_string();
+                final_path = cleaned.replace("?&", "?");
+                if final_path.ends_with('?') {
+                    final_path.pop();
+                }
+            }
+        }
+
+        // Parse eh=([^&]+)
+        if let Ok(re_eh) = regex::Regex::new(r"[?&]eh=([^&]+)") {
+            if let Some(caps) = re_eh.captures(&final_path) {
+                if let Some(m) = caps.get(1) {
+                    early_data_header_name = Some(unescape_percent_encoding(m.as_str()));
+                }
+                let cleaned = re_eh.replace_all(&final_path, "").to_string();
+                final_path = cleaned.replace("?&", "?");
+                if final_path.ends_with('?') {
+                    final_path.pop();
+                }
+            }
+        }
+
+        if final_path.is_empty() {
+            final_path = "/".to_string();
+        }
+
+        let mut ws_obj = json!({
             "type": "ws",
-            "path": singbox_cfg.get("path").and_then(|v| v.as_str()).unwrap_or("/"),
+            "path": final_path,
             "headers": {
                 "Host": host
-            },
-            "max_early_data": 2048,
-            "early_data_header_name": "Sec-WebSocket-Protocol"
+            }
         });
+
+        if let Some(ed) = max_early_data {
+            ws_obj["max_early_data"] = json!(ed);
+            ws_obj["early_data_header_name"] = json!(early_data_header_name.unwrap_or_else(|| "Sec-WebSocket-Protocol".to_string()));
+        }
+
+        outbound["transport"] = ws_obj;
     } else if transport == "httpupgrade" {
+        let path = singbox_cfg.get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("/");
+
         outbound["transport"] = json!({
             "type": "httpupgrade",
-            "path": singbox_cfg.get("path").and_then(|v| v.as_str()).unwrap_or("/"),
+            "path": path,
             "host": host
         });
     } else if transport == "xhttp" {
+        let path = singbox_cfg.get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("/");
+        let mode = singbox_cfg.get("mode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("auto");
+
         outbound["transport"] = json!({
             "type": "xhttp",
-            "mode": singbox_cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("auto"),
-            "path": singbox_cfg.get("path").and_then(|v| v.as_str()).unwrap_or("/"),
+            "mode": mode,
+            "path": path,
             "host": host
         });
     } else if transport == "grpc" {
@@ -227,7 +350,7 @@ pub async fn build_singbox_batch_test_config(
         let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let tag = format!("proxy-{}", i);
         let in_tag = format!("in-{}", i);
-        let port = base_port + i as u16;
+        let port = base_port + port_map.len() as u16;
 
         match build_singbox_outbound_with_tag(p, &tag).await {
             Ok((_raw_addr, _server_ip, outbound)) => {
@@ -275,6 +398,7 @@ pub async fn build_singbox_batch_test_config(
         "inbounds": inbounds,
         "outbounds": outbounds,
         "route": {
+            "default_domain_resolver": "direct-dns",
             "rules": route_rules,
             "final": "direct"
         }
@@ -691,3 +815,247 @@ pub async fn run_tcp_ping(host: String, port: u16) -> Result<i64, String> {
         Err(_) => Err("Timeout".into()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unescape_percent_encoding() {
+        assert_eq!(unescape_percent_encoding("%2F%3Fed%3D2048"), "/?ed=2048");
+        assert_eq!(unescape_percent_encoding("/mypath"), "/mypath");
+        assert_eq!(unescape_percent_encoding("/"), "/");
+    }
+
+    #[tokio::test]
+    async fn test_germany_vless_ws_alpn_and_host() {
+        let profile = json!({
+            "id": "de-1",
+            "protocol": "vless",
+            "serverAddress": "104.21.58.52",
+            "port": 443,
+            "singboxConfig": {
+                "uuid": "cced80e7-6419-494c-9032-940e9e372663",
+                "transport": "ws",
+                "security": "tls",
+                "sni": "ovh.rahanetmci.com",
+                "host": "", // host is empty in subscription link
+                "alpn": ["h2"], // link erroneously specifies h2
+                "path": "/?ed=2048"
+            }
+        });
+
+        let (_, _, outbound) = build_singbox_outbound_with_tag(&profile, "proxy-de").await.unwrap();
+
+        // ALPN must be http/1.1 for WebSocket, never pure h2
+        let alpn = outbound["tls"]["alpn"].as_array().unwrap();
+        assert_eq!(alpn, &vec![json!("http/1.1")]);
+
+        // Host header must NOT be empty string; it must fall back to sni
+        let host = outbound["transport"]["headers"]["Host"].as_str().unwrap();
+        assert_eq!(host, "ovh.rahanetmci.com");
+
+        // Path must have ed stripped, and max_early_data set
+        let path = outbound["transport"]["path"].as_str().unwrap();
+        assert_eq!(path, "/");
+        assert_eq!(outbound["transport"]["max_early_data"], json!(2048));
+        assert_eq!(outbound["transport"]["early_data_header_name"], json!("Sec-WebSocket-Protocol"));
+    }
+
+    #[tokio::test]
+    async fn test_georgia_vless_xhttp_alpn_and_host() {
+        let profile = json!({
+            "id": "georgia-1",
+            "protocol": "vless",
+            "serverAddress": "tr4.rahanetmci.com",
+            "port": 443,
+            "singboxConfig": {
+                "uuid": "cced80e7-6419-494c-9032-940e9e372663",
+                "transport": "xhttp",
+                "security": "tls",
+                "sni": "tr4.rahanetmci.com",
+                "host": "",
+                "path": "/",
+                "mode": "auto"
+            }
+        });
+
+        let (_, _, outbound) = build_singbox_outbound_with_tag(&profile, "proxy-georgia").await.unwrap();
+
+        // XHTTP uses h2 ALPN
+        let alpn = outbound["tls"]["alpn"].as_array().unwrap();
+        assert_eq!(alpn, &vec![json!("h2")]);
+
+        // Host must fall back to sni
+        let host = outbound["transport"]["host"].as_str().unwrap();
+        assert_eq!(host, "tr4.rahanetmci.com");
+        assert_eq!(outbound["transport"]["mode"], "auto");
+    }
+
+    #[tokio::test]
+    async fn test_ws_without_early_data() {
+        let profile = json!({
+            "id": "ws-plain",
+            "protocol": "vless",
+            "serverAddress": "1.2.3.4",
+            "port": 443,
+            "singboxConfig": {
+                "uuid": "uuid",
+                "transport": "ws",
+                "security": "tls",
+                "sni": "example.com",
+                "path": "/ws-path"
+            }
+        });
+
+        let (_, _, outbound) = build_singbox_outbound_with_tag(&profile, "proxy-plain").await.unwrap();
+
+        assert_eq!(outbound["transport"]["path"], "/ws-path");
+        assert!(outbound["transport"].get("max_early_data").is_none());
+        assert!(outbound["transport"].get("early_data_header_name").is_none());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_live_real_delay_germany_and_georgia() {
+        let de_profile = json!({
+            "id": "live-de",
+            "protocol": "vless",
+            "serverAddress": "104.21.58.52",
+            "port": 443,
+            "singboxConfig": {
+                "uuid": "cced80e7-6419-494c-9032-940e9e372663",
+                "transport": "ws",
+                "security": "tls",
+                "sni": "ovh.rahanetmci.com",
+                "host": "",
+                "alpn": ["h2"],
+                "path": "/"
+            }
+        });
+
+        let geo_profile = json!({
+            "id": "live-geo",
+            "protocol": "vless",
+            "serverAddress": "tr4.rahanetmci.com",
+            "port": 443,
+            "singboxConfig": {
+                "uuid": "cced80e7-6419-494c-9032-940e9e372663",
+                "transport": "xhttp",
+                "security": "tls",
+                "sni": "tr4.rahanetmci.com",
+                "host": "",
+                "path": "/",
+                "mode": "auto"
+            }
+        });
+
+        let az_profile = json!({
+            "id": "live-az",
+            "protocol": "vless",
+            "serverAddress": "tr5.rahanetmci.com",
+            "port": 443,
+            "singboxConfig": {
+                "uuid": "cced80e7-6419-494c-9032-940e9e372663",
+                "transport": "xhttp",
+                "security": "tls",
+                "sni": "tr5.rahanetmci.com",
+                "host": "",
+                "path": "/",
+                "mode": "auto"
+            }
+        });
+
+        let us_profile = json!({
+            "id": "live-us",
+            "protocol": "vless",
+            "serverAddress": "us4.rahanetmci.com",
+            "port": 443,
+            "singboxConfig": {
+                "uuid": "cced80e7-6419-494c-9032-940e9e372663",
+                "transport": "xhttp",
+                "security": "tls",
+                "sni": "us4.rahanetmci.com",
+                "host": "",
+                "path": "/",
+                "mode": "auto"
+            }
+        });
+
+        let temp_dir = std::env::temp_dir();
+        let cfg_path = temp_dir.join("sb-live-test.json");
+        let port_map = build_singbox_batch_test_config(&[de_profile, geo_profile, az_profile, us_profile], &cfg_path, 19888).await.unwrap();
+        assert_eq!(port_map.len(), 4);
+
+        let bin_path = std::path::PathBuf::from(r"..\resources\singbox\sing-box.exe");
+        if !bin_path.exists() {
+            println!("sing-box binary not found at {:?}, skipping live test", bin_path);
+            let _ = std::fs::remove_file(&cfg_path);
+            return;
+        }
+
+        let mut cmd = tokio::process::Command::new(&bin_path);
+        cmd.args(["run", "-c", cfg_path.to_str().unwrap()]);
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                println!("Cannot spawn sing-box: {}, skipping live test", e);
+                let _ = std::fs::remove_file(&cfg_path);
+                return;
+            }
+        };
+
+        // Wait for port 19888 to be ready
+        let mut ready = false;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if std::net::TcpStream::connect(("127.0.0.1", 19888)).is_ok() {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "sing-box failed to start test listeners");
+
+        let test_url = "https://www.google.com/generate_204";
+
+        for (id, port) in port_map {
+            let proxy_url = format!("http://127.0.0.1:{}", port);
+            let proxy = reqwest::Proxy::all(&proxy_url).unwrap();
+            let client = reqwest::Client::builder()
+                .proxy(proxy)
+                .timeout(std::time::Duration::from_millis(4000))
+                .connect_timeout(std::time::Duration::from_millis(3500))
+                .build()
+                .unwrap();
+
+            let mut latencies = Vec::new();
+            for i in 0..2 {
+                let start = std::time::Instant::now();
+                match client.get(test_url).send().await {
+                    Ok(resp) => {
+                        let s = resp.status();
+                        let _ = resp.text().await;
+                        let elapsed = start.elapsed().as_millis() as i64;
+                        println!("Reqwest {} attempt {}: status {}, elapsed {} ms", id, i, s, elapsed);
+                        if s.as_u16() == 204 || s.is_success() {
+                            latencies.push(elapsed);
+                        }
+                    }
+                    Err(e) => {
+                        println!("Reqwest {} attempt {} err: {}", id, i, e);
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            let min_ms = latencies.iter().copied().min().unwrap_or(-1);
+            println!("Profile {} reqwest min latency: {} ms", id, min_ms);
+            assert!(min_ms > 0, "Profile {} failed real delay test", id);
+        }
+
+        let _ = child.kill().await;
+        let _ = std::fs::remove_file(&cfg_path);
+    }
+}
+

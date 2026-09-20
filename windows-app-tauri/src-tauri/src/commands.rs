@@ -571,42 +571,54 @@ pub async fn http_ping(host: String, port: u16, tls: Option<bool>, sni: Option<S
 
 #[tauri::command]
 pub async fn singbox_test_latency() -> Result<Value, String> {
-    tokio::task::spawn_blocking(|| {
-        let proxy = match ureq::Proxy::new("http://127.0.0.1:2080") {
-            Ok(p) => p,
+    let proxy = match reqwest::Proxy::all("http://127.0.0.1:2080") {
+        Ok(p) => p,
+        Err(_) => return Ok(json!({ "success": false, "latency": -1 })),
+    };
+    let client = match reqwest::Client::builder()
+        .proxy(proxy)
+        .timeout(std::time::Duration::from_millis(5000))
+        .connect_timeout(std::time::Duration::from_millis(4500))
+        .build() {
+            Ok(c) => c,
             Err(_) => return Ok(json!({ "success": false, "latency": -1 })),
         };
-        let agent = ureq::AgentBuilder::new()
-            .proxy(proxy)
-            .timeout(std::time::Duration::from_millis(3500))
-            .build();
 
-        let mut min_ms = -1i64;
-        for _ in 0..2 {
-            let start = std::time::Instant::now();
-            let res = agent.get("https://www.google.com/generate_204").call();
-            let elapsed = start.elapsed().as_millis() as i64;
-            let is_ok = match res {
-                Ok(r) => r.status() == 204 || r.status() == 200,
-                Err(ureq::Error::Status(204, _)) | Err(ureq::Error::Status(200, _)) => true,
-                _ => false,
-            };
-            if is_ok {
-                if min_ms == -1 || elapsed < min_ms {
-                    min_ms = elapsed;
+    let mut latencies: Vec<i64> = Vec::new();
+    for _ in 0..2 {
+        let start = std::time::Instant::now();
+        match client.get("https://www.google.com/generate_204").send().await {
+            Ok(resp) => {
+                let s = resp.status();
+                let _ = resp.bytes().await;
+                let elapsed = start.elapsed().as_millis() as i64;
+                if s.as_u16() == 204 || s.is_success() {
+                    latencies.push(elapsed);
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(40));
+            Err(_) => {}
         }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 
-        if min_ms > 0 {
-            Ok(json!({ "success": true, "latency": min_ms }))
-        } else {
-            Ok(json!({ "success": false, "latency": -1 }))
+    if latencies.len() == 1 && latencies[0] > 250 {
+        let start = std::time::Instant::now();
+        if let Ok(resp) = client.get("https://www.google.com/generate_204").send().await {
+            let s = resp.status();
+            let _ = resp.bytes().await;
+            let elapsed = start.elapsed().as_millis() as i64;
+            if s.as_u16() == 204 || s.is_success() {
+                latencies.push(elapsed);
+            }
         }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }
+
+    let min_ms = latencies.into_iter().min().unwrap_or(-1);
+    if min_ms > 0 {
+        Ok(json!({ "success": true, "latency": min_ms }))
+    } else {
+        Ok(json!({ "success": false, "latency": -1 }))
+    }
 }
 
 #[tauri::command]
@@ -685,8 +697,8 @@ pub async fn singbox_batch_real_delay(
     // Wait for inbounds to become ready
     let first_port = port_map.first().map(|(_, p)| *p).unwrap_or(base_port);
     let mut ready = false;
-    for _ in 0..30 {
-        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         if std::net::TcpStream::connect(("127.0.0.1", first_port)).is_ok() {
             ready = true;
             break;
@@ -699,55 +711,109 @@ pub async fn singbox_batch_real_delay(
         return Err("sing-box test runner failed to start listeners".into());
     }
 
-    let target_url = test_url.unwrap_or_else(|| "https://www.google.com/generate_204".to_string());
-    let chunks: Vec<Vec<(String, u16)>> = port_map.chunks(6).map(|c| c.to_vec()).collect();
+    let target_url = test_url
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "https://www.google.com/generate_204".to_string());
 
-    for chunk in chunks {
-        let mut tasks = Vec::new();
-        for (profile_id, port) in chunk {
-            let url = target_url.clone();
-            tasks.push(tokio::task::spawn_blocking(move || {
-                let proxy_url = format!("http://127.0.0.1:{}", port);
-                let proxy = match ureq::Proxy::new(&proxy_url) {
-                    Ok(p) => p,
-                    Err(_) => return (profile_id, -1),
+    // Force https to prevent ISP / DPI interception and 301 redirects on port 80
+    let target_url = if !target_url.starts_with("http://") && !target_url.starts_with("https://") {
+        format!("https://{}", target_url)
+    } else if target_url.starts_with("http://") {
+        target_url.replacen("http://", "https://", 1)
+    } else {
+        target_url
+    };
+
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(3));
+    let mut set = tokio::task::JoinSet::new();
+
+    for (profile_id, port) in port_map {
+        // Stagger each probe by 80ms to avoid network burst congestion and false high pings
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        let sem_clone = sem.clone();
+        let app_clone = app.clone();
+        let url_str = target_url.clone();
+
+        set.spawn(async move {
+            let _permit = sem_clone.acquire_owned().await;
+
+            let proxy_url = format!("http://127.0.0.1:{}", port);
+            let proxy = match reqwest::Proxy::all(&proxy_url) {
+                Ok(p) => p,
+                Err(_) => {
+                    let _ = app_clone.emit("vpn:pingResult", json!({
+                        "profileId": profile_id,
+                        "latency": -1,
+                        "mode": "real"
+                    }));
+                    return (profile_id, -1);
+                }
+            };
+
+            let client = match reqwest::Client::builder()
+                .proxy(proxy)
+                .timeout(std::time::Duration::from_millis(5000))
+                .connect_timeout(std::time::Duration::from_millis(4500))
+                .build() {
+                    Ok(c) => c,
+                    Err(_) => {
+                        let _ = app_clone.emit("vpn:pingResult", json!({
+                            "profileId": profile_id,
+                            "latency": -1,
+                            "mode": "real"
+                        }));
+                        return (profile_id, -1);
+                    }
                 };
 
-                let agent = ureq::AgentBuilder::new()
-                    .proxy(proxy)
-                    .timeout(std::time::Duration::from_millis(3500))
-                    .build();
+            let mut latencies: Vec<i64> = Vec::new();
 
-                let mut min_ms = -1i64;
-                for _ in 0..2 {
-                    let start = std::time::Instant::now();
-                    let res = agent.get(&url).call();
-                    let elapsed = start.elapsed().as_millis() as i64;
-                    let is_ok = match res {
-                        Ok(r) => r.status() == 204 || r.status() == 200,
-                        Err(ureq::Error::Status(204, _)) | Err(ureq::Error::Status(200, _)) => true,
-                        _ => false,
-                    };
-                    if is_ok {
-                        if min_ms == -1 || elapsed < min_ms {
-                            min_ms = elapsed;
+            for _ in 0..2 {
+                let start = std::time::Instant::now();
+                match client.get(&url_str).send().await {
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let _ = resp.bytes().await;
+                        let elapsed = start.elapsed().as_millis() as i64;
+                        if status.as_u16() == 204 || status.is_success() {
+                            latencies.push(elapsed);
                         }
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(40));
+                    Err(_) => {}
                 }
-                (profile_id, min_ms)
-            }));
-        }
-
-        for task in tasks {
-            if let Ok((profile_id, latency)) = task.await {
-                results.insert(profile_id.clone(), latency);
-                let _ = app.emit("vpn:pingResult", json!({
-                    "profileId": profile_id,
-                    "latency": latency,
-                    "mode": "real"
-                }));
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
+
+            // Warm connection probe if only cold dial was recorded
+            if latencies.len() == 1 && latencies[0] > 250 {
+                let start = std::time::Instant::now();
+                if let Ok(resp) = client.get(&url_str).send().await {
+                    let status = resp.status();
+                    let _ = resp.bytes().await;
+                    let elapsed = start.elapsed().as_millis() as i64;
+                    if status.as_u16() == 204 || status.is_success() {
+                        latencies.push(elapsed);
+                    }
+                }
+            }
+
+            let min_ms = latencies.into_iter().min().unwrap_or(-1);
+
+            let _ = app_clone.emit("vpn:pingResult", json!({
+                "profileId": profile_id,
+                "latency": min_ms,
+                "mode": "real"
+            }));
+
+            (profile_id, min_ms)
+        });
+    }
+
+    while let Some(res) = set.join_next().await {
+        if let Ok((profile_id, latency)) = res {
+            results.insert(profile_id, latency);
         }
     }
 
@@ -795,3 +861,101 @@ pub async fn subscription_fetch(url: String) -> Result<Value, String> {
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+pub async fn tray_update_menu(
+    app: AppHandle,
+    profiles: Vec<Value>,
+    is_connected: bool,
+    current_profile_id: Option<String>,
+) -> Result<(), String> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu, IsMenuItem};
+
+    let tray = match app.tray_by_id("main-tray") {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+
+    let start_item = MenuItem::with_id(&app, "start_vpn", "Start VPN", !is_connected, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let stop_item = MenuItem::with_id(&app, "stop_vpn", "Stop VPN", is_connected, None::<&str>)
+        .map_err(|e| e.to_string())?;
+
+    let sep1 = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
+    let sep2 = PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?;
+
+    // Build items for the "Connect" submenu
+    let mut profile_menu_items = Vec::new();
+    if profiles.is_empty() {
+        let empty_item = MenuItem::with_id(&app, "no_profiles", "No profiles configured", false, None::<&str>)
+            .map_err(|e| e.to_string())?;
+        profile_menu_items.push(empty_item);
+    } else {
+        for p in &profiles {
+            let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("Server");
+            let proto = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
+            
+            let is_active = current_profile_id.as_deref() == Some(id);
+            let prefix = if is_active && is_connected {
+                "● "
+            } else if is_active {
+                "► "
+            } else {
+                "   "
+            };
+            let label = if proto.is_empty() {
+                format!("{}{}", prefix, name)
+            } else {
+                format!("{}{}{}", prefix, name, format!(" ({})", proto.to_uppercase()))
+            };
+
+            if let Ok(item) = MenuItem::with_id(&app, format!("profile:{}", id), label, true, None::<&str>) {
+                profile_menu_items.push(item);
+            }
+        }
+    }
+
+    let profile_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = profile_menu_items.iter().map(|i| i as &dyn IsMenuItem<tauri::Wry>).collect();
+    let connect_submenu = Submenu::with_items(&app, "Connect", true, &profile_refs)
+        .map_err(|e| e.to_string())?;
+
+    let show_item = MenuItem::with_id(&app, "show", "Show Secure VPN", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let quit_item = MenuItem::with_id(&app, "quit", "Quit", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+
+    let menu_items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
+        &start_item,
+        &stop_item,
+        &sep1,
+        &connect_submenu,
+        &sep2,
+        &show_item,
+        &quit_item,
+    ];
+
+    let new_menu = Menu::with_items(&app, &menu_items).map_err(|e| e.to_string())?;
+    tray.set_menu(Some(new_menu)).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &url])
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn();
+    }
+    Ok(())
+}
+
+

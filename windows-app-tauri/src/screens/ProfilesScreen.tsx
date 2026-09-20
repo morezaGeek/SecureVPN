@@ -432,6 +432,14 @@ export default function ProfilesScreen() {
                             key={profile.id}
                             className={`profile-card ${currentProfile?.id === profile.id ? 'selected' : ''}`}
                             onClick={() => selectProfile(profile)}
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                                if (e.key.toLowerCase() === 'r' && e.ctrlKey) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    testSingleProfile(profile.id, pingMode);
+                                }
+                            }}
                         >
                             <div className="profile-icon">
                                 {(() => {

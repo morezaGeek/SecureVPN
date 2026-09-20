@@ -5,7 +5,7 @@ import HomeScreen from './screens/HomeScreen'
 import ProfilesScreen from './screens/ProfilesScreen'
 import SettingsScreen from './screens/SettingsScreen'
 import LogsScreen from './screens/LogsScreen'
-import { Home, User, Settings, FileText, Minus, Square, X, Shield } from 'lucide-react'
+import { Home, User, Settings, FileText, Minus, Square, X, Shield, Github } from 'lucide-react'
 import packageJson from '../package.json'
 
 type Screen = 'home' | 'profiles' | 'settings' | 'logs'
@@ -79,10 +79,38 @@ function App() {
                                 </button>
                             </div>
 
-                            <div className="sidebar-footer">
-                                <span className="version-text">
+                            <div className="sidebar-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
+                                <span className="version-text" style={{ fontSize: '0.8rem' }}>
                                     v{packageJson.version}
                                 </span>
+                                <button
+                                    onClick={() => window.electronAPI?.openExternal?.('https://github.com/morezaGeek/SecureVPN/releases')}
+                                    title="GitHub Releases & Updates"
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: 'var(--text-secondary)',
+                                        fontSize: '0.78rem',
+                                        cursor: 'pointer',
+                                        padding: '3px 6px',
+                                        borderRadius: '4px',
+                                        transition: 'all 0.2s',
+                                    }}
+                                    onMouseEnter={e => {
+                                        e.currentTarget.style.color = 'var(--primary)'
+                                        e.currentTarget.style.background = 'var(--surface-light)'
+                                    }}
+                                    onMouseLeave={e => {
+                                        e.currentTarget.style.color = 'var(--text-secondary)'
+                                        e.currentTarget.style.background = 'transparent'
+                                    }}
+                                >
+                                    <Github size={13} />
+                                    <span>Releases</span>
+                                </button>
                             </div>
                         </nav>
 

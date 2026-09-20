@@ -121,6 +121,23 @@ export function setupTauriBridge() {
         },
         onTrayDisconnect: (callback: () => void) => {
             listen('tray:disconnect', () => callback())
+        },
+        onTraySelectProfile: (callback: (profileId: string) => void) => {
+            listen('tray:selectProfile', (event: any) => callback(event.payload))
+        },
+        updateTrayMenu: async (profiles: any[], isConnected: boolean, currentProfileId?: string) => {
+            try {
+                await invoke('tray_update_menu', { profiles, isConnected, currentProfileId })
+            } catch (err) {
+                console.error('Update tray menu error:', err)
+            }
+        },
+        openExternal: async (url: string) => {
+            try {
+                await invoke('open_external_url', { url })
+            } catch {
+                window.open(url, '_blank')
+            }
         }
     }
 

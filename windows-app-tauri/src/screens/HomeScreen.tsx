@@ -10,7 +10,6 @@ export default function HomeScreen() {
     const { connectionState, currentProfile, stats, profiles, selectProfile, connect, disconnect } = useVpn()
     const [elapsedTime, setElapsedTime] = useState(0)
     const [latency, setLatency] = useState<number | null>(null)
-    const [serverPing, setServerPing] = useState<number | null>(null)
     const [isTestingLatency, setIsTestingLatency] = useState(false)
     const [latencyTestMode, setLatencyTestMode] = useState<LatencyTestMode>('manual')
     const latencyIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -37,32 +36,21 @@ export default function HomeScreen() {
         }
     }, [connectionState])
 
-    // Test both latencies function
+    // Test latency function
     const testLatency = useCallback(async () => {
         if (connectionState !== 'connected' || !isV2rayProtocol) return
 
         setIsTestingLatency(true)
         try {
-            // Test both in parallel
-            const [latencyResult, serverPingResult] = await Promise.all([
-                window.electronAPI.testLatency(),
-                window.electronAPI.testServerPing()
-            ])
+            const latencyResult = await window.electronAPI.testLatency()
 
             if (latencyResult.success && latencyResult.latency > 0) {
                 setLatency(latencyResult.latency)
             } else {
                 setLatency(-1)
             }
-
-            if (serverPingResult.success && serverPingResult.latency > 0) {
-                setServerPing(serverPingResult.latency)
-            } else {
-                setServerPing(-1)
-            }
         } catch {
             setLatency(-1)
-            setServerPing(-1)
         } finally {
             setIsTestingLatency(false)
         }
@@ -79,7 +67,6 @@ export default function HomeScreen() {
         // Reset latency when disconnected
         if (connectionState !== 'connected') {
             setLatency(null)
-            setServerPing(null)
             setLatencyTestMode('manual')
             return
         }
@@ -231,10 +218,17 @@ export default function HomeScreen() {
                         <div style={{ marginTop: 4 }}>{getFlag(stats.countryCode || '', 28)}</div>
                         <div className="stat-label-compact">{stats.countryName || 'Location'}</div>
                     </div>
-                    <div className="stat-card stat-card-compact">
-                        <Shield size={12} className="stat-icon stat-icon-compact" />
-                        <div className="stat-value-xs">{stats.transportProtocol || 'TCP'}</div>
-                        <div className="stat-label-compact">Protocol</div>
+                    <div 
+                        className="stat-card stat-card-compact clickable" 
+                        onClick={testLatency}
+                        style={{ cursor: isV2rayProtocol ? 'pointer' : 'default' }}
+                        title={isV2rayProtocol ? "Click to test latency manually" : "Latency test not available for this protocol"}
+                    >
+                        <Zap size={12} className="stat-icon stat-icon-compact" color={getPingColor(latency)} />
+                        <div className="stat-value-xs" style={{ color: getPingColor(latency) }}>
+                            {getPingDisplay(latency)}
+                        </div>
+                        <div className="stat-label-compact">Live Ping</div>
                     </div>
                 </div>
             )}
@@ -250,13 +244,6 @@ export default function HomeScreen() {
             {/* Latency Test - Only for V2ray protocols when connected */}
             {connectionState === 'connected' && isV2rayProtocol && (
                 <div className="latency-test-container">
-                    <div className="latency-display">
-                        <Server size={14} style={{ color: getPingColor(serverPing) }} />
-                        <span className="latency-value" style={{ color: getPingColor(serverPing) }}>
-                            {getPingDisplay(serverPing)}
-                        </span>
-                        <span className="latency-label">TCP PING</span>
-                    </div>
                     <div className="latency-display">
                         <Zap size={14} style={{ color: getPingColor(latency) }} />
                         <span className="latency-value" style={{ color: getPingColor(latency) }}>

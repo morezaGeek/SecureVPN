@@ -38,6 +38,7 @@ export default function ProfilesScreen() {
         selectProfile, 
         subscriptions, 
         addSubscription, 
+        updateSubscription,
         deleteSubscription, 
         refreshSubscription, 
         refreshingSubIds,
@@ -60,8 +61,11 @@ export default function ProfilesScreen() {
     const [isModalOpen, setIsModalOpen] = useState(false)
     const [editingProfile, setEditingProfile] = useState<VpnProfile | null>(null)
     const [formData, setFormData] = useState<VpnProfile>(createDefaultProfile())
-    const [subUrl, setSubUrl] = useState('')
+    const [isSubModalOpen, setIsSubModalOpen] = useState(false)
+    const [subFormData, setSubFormData] = useState({ id: '', name: '', url: '' })
     const [isAddingSub, setIsAddingSub] = useState(false)
+    const [selectedSubId, setSelectedSubId] = useState<string | null>(null)
+    const [editingSub, setEditingSub] = useState<boolean>(false)
 
     const openAddModal = () => {
         setEditingProfile(null)
@@ -218,14 +222,33 @@ export default function ProfilesScreen() {
         }
     }
 
-    const handleAddSubscription = async () => {
-        if (!subUrl.trim()) return
+    const openAddSubModal = () => {
+        setEditingSub(false)
+        setSubFormData({ id: '', name: '', url: '' })
+        setIsSubModalOpen(true)
+    }
+
+    const openEditSubModal = (sub: any) => {
+        setEditingSub(true)
+        setSubFormData({ id: sub.id, name: sub.name, url: sub.url })
+        setIsSubModalOpen(true)
+    }
+
+    const handleSaveSub = async () => {
+        if (!subFormData.url.trim()) return
         setIsAddingSub(true)
         try {
-            await addSubscription(subUrl.trim())
-            setSubUrl('')
+            if (editingSub) {
+                // We need `updateSubscription` from VpnContext
+                // which is already imported and available!
+                updateSubscription({ ...subscriptions.find(s => s.id === subFormData.id)!, name: subFormData.name, url: subFormData.url })
+                // Also trigger a refresh if URL changed, or just save
+            } else {
+                await addSubscription(subFormData.url.trim(), subFormData.name.trim())
+            }
+            setIsSubModalOpen(false)
         } catch (e) {
-            alert('Failed to add subscription: ' + String(e))
+            alert('Failed to save subscription: ' + String(e))
         } finally {
             setIsAddingSub(false)
         }
@@ -259,6 +282,8 @@ export default function ProfilesScreen() {
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [isModalOpen, currentProfile, profiles, pingMode, testSingleProfile])
 
+    const displayedProfiles = selectedSubId ? profiles.filter(p => p.subscriptionId === selectedSubId) : profiles
+
     return (
         <div>
             <div className="card-header">
@@ -287,31 +312,53 @@ export default function ProfilesScreen() {
             <div className="card-header" style={{ marginTop: 'var(--spacing-lg)' }}>
                 <h3 className="card-title" style={{ fontSize: '1.1rem' }}>Subscriptions</h3>
                 <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
-                    <input 
-                        type="text" 
-                        className="form-input" 
-                        placeholder="https://.../sub/..." 
-                        value={subUrl} 
-                        onChange={e => setSubUrl(e.target.value)} 
-                        style={{ width: '250px' }}
-                    />
-                    <button className="btn btn-primary" onClick={handleAddSubscription} disabled={isAddingSub}>
-                        {isAddingSub ? <RefreshCw size={18} className="spin" /> : <LinkIcon size={18} />}
+                    <button className="btn btn-primary" onClick={openAddSubModal} disabled={isAddingSub}>
+                        {isAddingSub ? <RefreshCw size={18} className="spin-animation" /> : <LinkIcon size={18} />}
                         Add Sub
                     </button>
                 </div>
             </div>
 
             {subscriptions.length > 0 && (
-                <div className="profile-list" style={{ marginBottom: 'var(--spacing-lg)' }}>
-                    {subscriptions.map(sub => {
-                        // Calculate percentage and days remaining
+                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
+                    <div 
+                        className={`profile-card ${selectedSubId === null ? 'selected' : ''}`} 
+                        onClick={() => setSelectedSubId(null)}
+                        style={{ padding: '8px 16px', cursor: 'pointer', borderRadius: '8px', flexShrink: 0, minHeight: 'auto' }}
+                    >
+                        <strong>All Profiles</strong>
+                    </div>
+                    {subscriptions.map(sub => (
+                        <div 
+                            key={sub.id} 
+                            className={`profile-card ${selectedSubId === sub.id ? 'selected' : ''}`} 
+                            onClick={() => setSelectedSubId(sub.id)}
+                            style={{ padding: '8px 16px', cursor: 'pointer', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, minHeight: 'auto' }}
+                        >
+                            <strong>{sub.name}</strong>
+                            <button className="title-bar-button" onClick={(e) => { e.stopPropagation(); refreshSubscription(sub.id); }} title="Refresh" disabled={refreshingSubIds?.includes(sub.id)} style={{ padding: '2px' }}>
+                                <RefreshCw size={14} className={refreshingSubIds?.includes(sub.id) ? 'spin-animation' : ''} />
+                            </button>
+                            <button className="title-bar-button" onClick={(e) => { e.stopPropagation(); openEditSubModal(sub); }} title="Edit" style={{ padding: '2px' }}>
+                                <Edit2 size={14} />
+                            </button>
+                            <button className="title-bar-button" onClick={(e) => { e.stopPropagation(); deleteSubscription(sub.id); if(selectedSubId === sub.id) setSelectedSubId(null); }} title="Delete" style={{ padding: '2px', color: 'var(--danger)' }}>
+                                <Trash2 size={14} />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Show stats for selected subscription */}
+            {selectedSubId && subscriptions.find(s => s.id === selectedSubId) && (
+                <div style={{ marginBottom: 'var(--spacing-lg)' }}>
+                    {(() => {
+                        const sub = subscriptions.find(s => s.id === selectedSubId)!
                         const used = sub.upload + sub.download
                         const percent = sub.total > 0 ? Math.min(100, Math.round((used / sub.total) * 100)) : 0
-                        
                         const gbUsed = (used / (1024 * 1024 * 1024)).toFixed(2)
                         const gbTotal = sub.total > 0 ? (sub.total / (1024 * 1024 * 1024)).toFixed(2) : '∞'
-                        
                         let daysLeft = '∞'
                         if (sub.expire > 0) {
                             const diff = sub.expire * 1000 - Date.now()
@@ -321,14 +368,11 @@ export default function ProfilesScreen() {
                                 daysLeft = 'Expired'
                             }
                         }
-
                         return (
-                            <div key={sub.id} className="profile-card" style={{ cursor: 'default' }}>
-                                <div className="profile-icon">
-                                    <Database size={24} />
-                                </div>
+                            <div className="profile-card" style={{ cursor: 'default' }}>
+                                <div className="profile-icon"><Database size={24} /></div>
                                 <div className="profile-info" style={{ flex: 2 }}>
-                                    <div className="profile-name">{sub.name}</div>
+                                    <div className="profile-name">{sub.name} Stats</div>
                                     <div className="profile-server" style={{ fontSize: '0.8rem' }}>
                                         {gbUsed}GB / {gbTotal}GB • {daysLeft} Days left
                                     </div>
@@ -340,29 +384,18 @@ export default function ProfilesScreen() {
                                         </div>
                                     )}
                                 </div>
-                                <button 
-                                    className="title-bar-button" 
-                                    onClick={() => refreshSubscription(sub.id)} 
-                                    title="Refresh"
-                                    disabled={refreshingSubIds?.includes(sub.id)}
-                                >
-                                    <RefreshCw size={16} className={refreshingSubIds?.includes(sub.id) ? 'spin-animation' : ''} />
-                                </button>
-                                <button className="title-bar-button" onClick={() => deleteSubscription(sub.id)} title="Delete">
-                                    <Trash2 size={16} />
-                                </button>
                             </div>
                         )
-                    })}
+                    })()}
                 </div>
             )}
 
             <div className="card-header" style={{ marginTop: 'var(--spacing-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 className="card-title" style={{ fontSize: '1.1rem' }}>
-                    Servers {profiles.length > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400 }}>({profiles.length})</span>}
+                    Servers {displayedProfiles.length > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400 }}>({displayedProfiles.length})</span>}
                 </h3>
 
-                {profiles.length > 0 && (
+                {displayedProfiles.length > 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {/* Segmented control: [Real delay] [TCP] */}
                         <div className="ping-mode-group">
@@ -389,7 +422,7 @@ export default function ProfilesScreen() {
                             className="btn btn-primary" 
                             style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 14px', fontSize: '0.85rem' }}
                             onClick={() => testAllPings(pingMode)} 
-                            disabled={isTestingPings || profiles.length === 0}
+                            disabled={isTestingPings || displayedProfiles.length === 0}
                             title={`Test all servers using ${pingMode.toUpperCase()}`}
                         >
                             {isTestingPings ? (
@@ -413,7 +446,7 @@ export default function ProfilesScreen() {
                 )}
             </div>
 
-            {profiles.length === 0 ? (
+            {displayedProfiles.length === 0 ? (
                 <div className="empty-state">
                     <Globe size={64} />
                     <h3 className="empty-state-title">No Profiles Yet</h3>
@@ -427,7 +460,7 @@ export default function ProfilesScreen() {
                 </div>
             ) : (
                 <div className="profile-list">
-                    {profiles.map(profile => (
+                    {displayedProfiles.map(profile => (
                         <div
                             key={profile.id}
                             className={`profile-card ${currentProfile?.id === profile.id ? 'selected' : ''}`}
@@ -862,6 +895,53 @@ export default function ProfilesScreen() {
                             <button className="btn btn-primary" onClick={handleSave}>
                                 <Check size={18} />
                                 {editingProfile ? 'Save Changes' : 'Create Profile'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isSubModalOpen && (
+                <div className="modal-overlay" onClick={() => setIsSubModalOpen(false)}>
+                    <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+                        <div className="modal-header">
+                            <h3 className="modal-title">{editingSub ? 'Edit Subscription' : 'Add Subscription'}</h3>
+                            <button className="modal-close" onClick={() => setIsSubModalOpen(false)}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <div className="form-group">
+                                <label className="form-label">Name (Optional)</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={subFormData.name} 
+                                    onChange={e => setSubFormData({...subFormData, name: e.target.value})} 
+                                    placeholder="My Subscription"
+                                />
+                                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                    Leave blank to use the name provided by the server.
+                                </div>
+                            </div>
+                            <div className="form-group">
+                                <label className="form-label">URL</label>
+                                <input 
+                                    type="text" 
+                                    className="form-input" 
+                                    value={subFormData.url} 
+                                    onChange={e => setSubFormData({...subFormData, url: e.target.value})} 
+                                    placeholder="https://..."
+                                />
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={() => setIsSubModalOpen(false)}>
+                                Cancel
+                            </button>
+                            <button className="btn btn-primary" onClick={handleSaveSub} disabled={isAddingSub || !subFormData.url.trim()}>
+                                {isAddingSub ? <RefreshCw size={18} className="spin-animation" /> : <Check size={18} />}
+                                {editingSub ? 'Save Changes' : 'Add Subscription'}
                             </button>
                         </div>
                     </div>

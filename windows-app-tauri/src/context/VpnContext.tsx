@@ -16,7 +16,7 @@ interface VpnContextType {
 
     // Subscriptions
     subscriptions: VpnSubscription[]
-    addSubscription: (url: string) => Promise<void>
+    addSubscription: (url: string, name?: string) => Promise<void>
     updateSubscription: (sub: VpnSubscription) => void
     deleteSubscription: (id: string) => void
     refreshSubscription: (id: string, directSub?: VpnSubscription) => Promise<void>
@@ -260,7 +260,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
             // Update sub stats
             const updatedSub: VpnSubscription = {
                 ...sub,
-                name: parsed.name || sub.name,
+                name: (sub.name && sub.name !== 'New Subscription' && sub.name !== new URL(sub.url).hostname) ? sub.name : (parsed.name || sub.name),
                 upload: parsed.upload,
                 download: parsed.download,
                 total: parsed.total,
@@ -324,11 +324,11 @@ export function VpnProvider({ children }: VpnProviderProps) {
         }
     }, [subscriptions, refreshSubscription])
 
-    const addSubscription = useCallback(async (url: string) => {
+    const addSubscription = useCallback(async (url: string, name: string = '') => {
         const id = crypto.randomUUID()
         const newSub: VpnSubscription = {
             id,
-            name: 'New Subscription',
+            name: name || 'New Subscription',
             url,
             upload: 0,
             download: 0,

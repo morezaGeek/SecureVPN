@@ -1,12 +1,13 @@
 // VPN Protocol types
-export type VpnProtocol = 'openconnect' | 'vless' | 'vmess' | 'trojan' | 'shadowsocks'
+export type VpnProtocol = 'openconnect' | 'vless' | 'vmess' | 'trojan' | 'shadowsocks' | 'hysteria2'
 
 export const PROTOCOL_INFO: Record<VpnProtocol, { displayName: string; description: string }> = {
     openconnect: { displayName: 'OpenConnect', description: 'Cisco AnyConnect compatible' },
     vless: { displayName: 'VLESS', description: 'Lightweight V2Ray protocol' },
     vmess: { displayName: 'VMess', description: 'V2Ray main protocol' },
     trojan: { displayName: 'Trojan', description: 'Trojan-GFW protocol' },
-    shadowsocks: { displayName: 'Shadowsocks', description: 'Secure SOCKS5 proxy' }
+    shadowsocks: { displayName: 'Shadowsocks', description: 'Secure SOCKS5 proxy' },
+    hysteria2: { displayName: 'Hysteria2', description: 'Hysteria v2 Protocol' }
 }
 
 // sing-box transport types
@@ -37,6 +38,10 @@ export interface SingboxProfile {
 
     // Shadowsocks specific
     method?: string                 // Cipher method: "aes-256-gcm", "chacha20-ietf-poly1305", etc.
+
+    // Hysteria2 specific
+    hysteriaObfs?: string
+    hysteriaObfsPassword?: string
 
     // Reality specific  
     publicKey?: string

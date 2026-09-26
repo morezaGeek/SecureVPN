@@ -107,6 +107,14 @@ export function setupTauriBridge() {
         fetchSubscription: async (url: string) => {
             return await invoke('subscription_fetch', { url })
         },
+        fetchOriginalIp: async () => {
+            try {
+                const ip = await invoke('fetch_original_ip') as string;
+                return ip;
+            } catch (e) {
+                return '';
+            }
+        },
         onVpnStateChanged: (callback: (state: any) => void) => {
             listen('vpn:stateChanged', (event: any) => callback(event.payload))
         },

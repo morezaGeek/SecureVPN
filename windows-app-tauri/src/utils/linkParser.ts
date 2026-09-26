@@ -23,6 +23,8 @@ export function parseShareLink(link: string): ParsedLink | null {
         return parseTrojanLink(link)
     } else if (link.startsWith('ss://')) {
         return parseShadowsocksLink(link)
+    } else if (link.startsWith('hysteria2://')) {
+        return parseHysteria2Link(link)
     }
 
     return null
@@ -290,6 +292,46 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
 
         default:
             return ''
+    }
+}
+
+/**
+ * Parse Hysteria2 link
+ */
+function parseHysteria2Link(link: string): ParsedLink | null {
+    try {
+        const uri = new URL(link.replace('hysteria2://', 'http://'))
+        const password = uri.username || uri.password
+        const address = uri.hostname
+        const port = parseInt(uri.port || '443', 10)
+        let name = decodeURIComponent(uri.hash.substring(1) || `Hysteria2-${address}`)
+
+        const sni = uri.searchParams.get('sni') || address
+        const obfs = uri.searchParams.get('obfs') || undefined
+        const obfsPassword = uri.searchParams.get('obfs-password') || undefined
+        const fp = uri.searchParams.get('fp') || 'chrome'
+        const alpn = uri.searchParams.get('alpn')
+
+        return {
+            protocol: 'hysteria2',
+            name,
+            config: {
+                uuid: password, // Store password in uuid field since they share similar auth purpose
+                address,
+                port,
+                transport: 'tcp', // Hysteria2 is inherently QUIC/UDP, we will handle this in singbox-service
+                security: 'tls',
+                sni,
+                fingerprint: fp,
+                alpn: alpn ? alpn.split(',') : undefined,
+                allowInsecure: true,
+                hysteriaObfs: obfs,
+                hysteriaObfsPassword: obfsPassword
+            }
+        }
+    } catch (e) {
+        console.error('Failed to parse Hysteria2 link:', e)
+        return null
     }
 }
 

@@ -12,7 +12,19 @@ export default function HomeScreen() {
     const [latency, setLatency] = useState<number | null>(null)
     const [isTestingLatency, setIsTestingLatency] = useState(false)
     const [latencyTestMode, setLatencyTestMode] = useState<LatencyTestMode>('manual')
+    const [realPublicIp, setRealPublicIp] = useState<string | null>(null)
     const latencyIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+    // Fetch real public IP when disconnected
+    useEffect(() => {
+        if (connectionState === 'disconnected' && !realPublicIp) {
+            if (window.electronAPI && window.electronAPI.fetchOriginalIp) {
+                window.electronAPI.fetchOriginalIp().then(ip => {
+                    if (ip) setRealPublicIp(ip)
+                }).catch(() => {})
+            }
+        }
+    }, [connectionState, realPublicIp])
 
     // Check if current profile is V2ray protocol
     const isV2rayProtocol = currentProfile?.protocol &&
@@ -229,6 +241,11 @@ export default function HomeScreen() {
                             {getPingDisplay(latency)}
                         </div>
                         <div className="stat-label-compact">Live Ping</div>
+                    </div>
+                    <div className="stat-card stat-card-compact" style={{ gridColumn: '1 / -1', flexDirection: 'row', gap: '12px', justifyContent: 'center' }}>
+                        <Shield size={14} className="stat-icon stat-icon-compact" style={{ marginBottom: 0 }} />
+                        <div className="stat-label-compact" style={{ fontSize: '11px' }}>Original IP:</div>
+                        <div className="stat-value-xs" style={{ fontSize: '12px' }}>{realPublicIp || '—'}</div>
                     </div>
                 </div>
             )}

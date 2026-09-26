@@ -273,7 +273,7 @@ pub async fn vpn_connect(
     let protocol = profile.get("protocol").and_then(|v| v.as_str()).unwrap_or("vless");
     state.is_running.store(true, Ordering::SeqCst);
 
-    let pid_res = if ["vless", "vmess", "trojan", "shadowsocks"].contains(&protocol) {
+    let pid_res = if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
         let bin_path = resolve_binary(&app, "singbox/sing-box.exe")?;
 
         let temp_dir = std::env::temp_dir();
@@ -302,7 +302,7 @@ pub async fn vpn_connect(
             s.stats.connected_time = 0;
             let _ = app.emit("vpn:stateChanged", s.clone());
 
-            if ["vless", "vmess", "trojan", "shadowsocks"].contains(&protocol) {
+            if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
                 set_system_proxy(true, Some(&profile));
             }
 
@@ -664,7 +664,7 @@ pub async fn singbox_batch_real_delay(
                 "latency": latency,
                 "mode": "real"
             }));
-        } else if ["vless", "vmess", "trojan", "shadowsocks"].contains(&protocol) {
+        } else if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
             sb_profiles.push(p.clone());
         }
     }
@@ -959,3 +959,33 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
 }
 
 
+
+#[tauri::command]
+pub async fn fetch_original_ip() -> Result<String, String> {
+    let res = tokio::task::spawn_blocking(|| {
+        let endpoints = [
+            "https://api.ipify.org",
+            "https://ifconfig.me/ip",
+            "https://icanhazip.com/",
+            "http://ip-api.com/json/?fields=query"
+        ];
+        for ep in endpoints {
+            if let Ok(r) = ureq::get(ep).timeout(std::time::Duration::from_millis(3000)).call() {
+                if let Ok(mut text) = r.into_string() {
+                    if ep.contains("ip-api.com") {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if let Some(ip) = val.get("query").and_then(|v| v.as_str()) {
+                                return Some(ip.to_string());
+                            }
+                        }
+                    } else {
+                        text = text.trim().to_string();
+                        if text.contains('.') || text.contains(':') { return Some(text); }
+                    }
+                }
+            }
+        }
+        None
+    }).await.map_err(|e| e.to_string())?;
+    res.ok_or_else(|| "Failed to fetch IP".to_string())
+}

@@ -120,6 +120,25 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
 
     // Build outbound based on protocol
     let mut outbound = match protocol {
+        "hysteria2" => {
+            let mut o = json!({
+                "type": "hysteria2",
+                "tag": tag,
+                "server": server_ip,
+                "server_port": port,
+                "password": uuid
+            });
+            if let Some(obfs) = singbox_cfg.get("hysteriaObfs").and_then(|v| v.as_str()) {
+                if obfs == "salamander" {
+                    let obfs_pw = singbox_cfg.get("hysteriaObfsPassword").and_then(|v| v.as_str()).unwrap_or("");
+                    o["obfs"] = json!({
+                        "type": "salamander",
+                        "password": obfs_pw
+                    });
+                }
+            }
+            o
+        }
         "vless" => {
             let mut o = json!({
                 "type": "vless",
@@ -171,11 +190,15 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
         let mut tls_obj = json!({
             "enabled": true,
             "server_name": sni,
-            "utls": {
+        });
+
+        // Hysteria2 is QUIC-based and does not support uTLS
+        if protocol != "hysteria2" {
+            tls_obj["utls"] = json!({
                 "enabled": true,
                 "fingerprint": fingerprint
-            }
-        });
+            });
+        }
 
         if security == "tls" {
             let custom_alpn: Option<Vec<String>> = singbox_cfg.get("alpn")
@@ -343,7 +366,7 @@ pub async fn build_singbox_batch_test_config(
 
     for (i, p) in profiles.iter().enumerate() {
         let protocol = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
-        if !["vless", "vmess", "trojan", "shadowsocks"].contains(&protocol) {
+        if !["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
             continue;
         }
 

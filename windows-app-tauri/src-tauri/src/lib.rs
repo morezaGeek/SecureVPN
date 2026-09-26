@@ -142,6 +142,7 @@ pub fn run() {
             subscription_fetch,
             tray_update_menu,
             open_external_url,
+            fetch_original_ip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

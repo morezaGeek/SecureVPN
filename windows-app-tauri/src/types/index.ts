@@ -22,6 +22,9 @@ export interface SingboxProfile {
     encryption?: string             // "none" for VLESS, "auto" for VMess
     transport: SingboxTransport
     security: SingboxSecurity
+    // Optional legacy imported TLS/REALITY metadata used for the protocol badge.
+    tls?: unknown
+    reality?: unknown
     tunStack?: 'mixed' | 'gvisor' | 'system'
 
     // TLS options
@@ -35,6 +38,7 @@ export interface SingboxProfile {
     host?: string                   // HTTP Host header
     serviceName?: string            // gRPC service name
     mode?: string                   // xhttp mode: "auto", "stream-one", "stream-up", "packet-up"
+    extra?: Record<string, unknown> // Original XHTTP share-link extras; retain for export/refresh
 
     // Shadowsocks specific
     method?: string                 // Cipher method: "aes-256-gcm", "chacha20-ietf-poly1305", etc.

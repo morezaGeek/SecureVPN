@@ -3,6 +3,8 @@ import { useVpn } from '../context/VpnContext'
 import { VpnProfile, VpnProtocol, AuthType, PROTOCOL_INFO, createDefaultProfile, SingboxTransport, SingboxSecurity } from '../types'
 import { Plus, Globe, Edit2, Trash2, X, Check, Download, Upload, Clipboard, RefreshCw, Link as LinkIcon, Database, Activity, Play, RotateCcw } from 'lucide-react'
 import { parseShareLink } from '../utils/linkParser'
+import { orderProfilesBySubscription } from '../utils/profilePresentation'
+import SubscriptionBadge from '../components/SubscriptionBadge'
 
 // Convert 2-letter country code to flag CDN url
 function countryCodeToFlagUrl(code: string): string {
@@ -105,13 +107,15 @@ export default function ProfilesScreen() {
 
     // Export profiles to JSON file
     const handleExport = async () => {
+        const api = window.electronAPI
+        if (!api) return
         if (profiles.length === 0) {
             alert('No profiles to export')
             return
         }
 
         try {
-            const result = await window.electronAPI.showSaveDialog({
+            const result = await api.showSaveDialog({
                 title: 'Export Profiles',
                 defaultPath: 'vpn-profiles.json',
                 filters: [{ name: 'JSON Files', extensions: ['json'] }]
@@ -128,7 +132,7 @@ export default function ProfilesScreen() {
                     }))
                 }
 
-                const writeResult = await window.electronAPI.writeFile(
+                const writeResult = await api.writeFile(
                     result.filePath,
                     JSON.stringify(exportData, null, 2)
                 )
@@ -147,15 +151,17 @@ export default function ProfilesScreen() {
 
     // Import profiles from JSON file
     const handleImport = async () => {
+        const api = window.electronAPI
+        if (!api) return
         try {
-            const result = await window.electronAPI.showOpenDialog({
+            const result = await api.showOpenDialog({
                 title: 'Import Profiles',
                 filters: [{ name: 'JSON Files', extensions: ['json'] }],
                 properties: ['openFile']
             })
 
             if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
-                const readResult = await window.electronAPI.readFile(result.filePaths[0])
+                const readResult = await api.readFile(result.filePaths[0])
 
                 if (readResult.success && readResult.content) {
                     const importData = JSON.parse(readResult.content)
@@ -282,7 +288,7 @@ export default function ProfilesScreen() {
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [isModalOpen, currentProfile, profiles, pingMode, testSingleProfile])
 
-    const displayedProfiles = selectedSubId ? profiles.filter(p => p.subscriptionId === selectedSubId) : profiles
+    const displayedProfiles = selectedSubId ? profiles.filter(p => p.subscriptionId === selectedSubId) : orderProfilesBySubscription(profiles, subscriptions)
 
     return (
         <div>
@@ -485,7 +491,10 @@ export default function ProfilesScreen() {
                                 })()}
                             </div>
                             <div className="profile-info">
-                                <div className="profile-name">{profile.name}</div>
+                                <div className="profile-name-row">
+                                    <div className="profile-name">{profile.name}</div>
+                                    <SubscriptionBadge profile={profile} subscriptions={subscriptions} />
+                                </div>
                                 <div className="profile-server">
                                     {profile.serverAddress}:{profile.port}
                                     {testingProfileIds?.includes(profile.id) ? (

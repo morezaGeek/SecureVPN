@@ -49,7 +49,12 @@ export function parseVlessLink(link: string): ParsedLink | null {
         const rawType = params.get('type') || 'tcp'
         const transport = (rawType === 'splithttp' ? 'xhttp' : rawType) as SingboxTransport
         const security = (params.get('security') || 'none') as SingboxSecurity
-        const mode = params.get('mode') || params.get('xhttpMode') || undefined
+        const extra = params.has('extra') ? JSON.parse(params.get('extra')!) : undefined
+        if (extra !== undefined && (!extra || Array.isArray(extra) || typeof extra !== 'object')) {
+            throw new Error('XHTTP extra must be a JSON object')
+        }
+        const mode = params.get('mode') || params.get('xhttpMode') ||
+            (typeof extra?.mode === 'string' ? extra.mode : undefined)
 
         const config: SingboxProfile = {
             uuid,
@@ -65,6 +70,7 @@ export function parseVlessLink(link: string): ParsedLink | null {
             host: params.get('host') || params.get('sni') || undefined,
             serviceName: params.get('serviceName') || undefined,
             mode,
+            extra,
             // Reality
             publicKey: params.get('pbk') || undefined,
             shortId: params.get('sid') || undefined
@@ -248,6 +254,8 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
             if (config.path) params.set('path', config.path)
             if (config.host) params.set('host', config.host)
             if (config.encryption) params.set('encryption', config.encryption)
+            if (config.mode) params.set('mode', config.mode)
+            if (config.extra) params.set('extra', JSON.stringify(config.extra))
             if (config.publicKey) params.set('pbk', config.publicKey)
             if (config.shortId) params.set('sid', config.shortId)
 

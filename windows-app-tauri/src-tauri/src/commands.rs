@@ -273,7 +273,8 @@ pub async fn vpn_connect(
     let protocol = profile.get("protocol").and_then(|v| v.as_str()).unwrap_or("vless");
     state.is_running.store(true, Ordering::SeqCst);
 
-    let pid_res = if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
+    // Route setup/validation errors through the same state cleanup as spawn errors.
+    let pid_res = async { if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
         let bin_path = resolve_binary(&app, "singbox/sing-box.exe")?;
 
         let temp_dir = std::env::temp_dir();
@@ -292,7 +293,7 @@ pub async fn vpn_connect(
             state.is_running.clone(),
             state.vpn_state.clone(),
         ).await
-    };
+    } }.await;
 
     match pid_res {
         Ok(pid) => {

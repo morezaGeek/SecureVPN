@@ -351,7 +351,8 @@ export function VpnProvider({ children }: VpnProviderProps) {
     }, [])
 
     const testAllPings = useCallback(async (mode: 'tcp' | 'http' | 'real' = 'real') => {
-        if (!window.electronAPI || isTestingPings) return
+        const api = window.electronAPI
+        if (!api || isTestingPings) return
         
         setIsTestingPings(true)
         // Reset all pings first so user sees new results coming in
@@ -362,7 +363,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
         if (mode === 'real') {
             setTestingProfileIds(targetProfiles.map(p => p.id))
             try {
-                const results = await window.electronAPI.batchRealDelay(targetProfiles)
+                const results = await api.batchRealDelay(targetProfiles)
                 if (results && typeof results === 'object') {
                     setProfiles(prev => prev.map(p => {
                         const latency = results[p.id]
@@ -393,7 +394,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
                     if (mode === 'tcp') {
                         // Direct TCP handshake ping to serverAddress:port
                         if (profile.serverAddress && profile.port) {
-                            const res = await window.electronAPI.tcpPing(profile.serverAddress, profile.port)
+                            const res = await api.tcpPing(profile.serverAddress, profile.port)
                             if (res.success && res.latency > 0) {
                                 finalLatency = res.latency
                             }
@@ -405,7 +406,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
                                           profile.singboxConfig?.security === 'reality' || 
                                           profile.port === 443
                             const sni = profile.singboxConfig?.sni || profile.serverAddress
-                            const res = await window.electronAPI.httpPing(profile.serverAddress, profile.port, isTls, sni)
+                            const res = await api.httpPing(profile.serverAddress, profile.port, isTls, sni)
                             if (res.success && res.latency > 0) {
                                 finalLatency = res.latency
                             }

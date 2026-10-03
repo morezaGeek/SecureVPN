@@ -3,17 +3,21 @@ import { Power, ArrowUp, ArrowDown, Clock, Globe, Shield, MapPin, Zap, Server } 
 import { formatBytes, formatBits, formatDuration } from '../types'
 import { getFlag } from '../components/Flags'
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { orderProfilesBySubscription } from '../utils/profilePresentation'
+import ProfilePicker from '../components/ProfilePicker'
+import SubscriptionBadge from '../components/SubscriptionBadge'
 
 type LatencyTestMode = 'manual' | '1s' | '5s' | '30s' | '60s'
 
 export default function HomeScreen() {
-    const { connectionState, currentProfile, stats, profiles, selectProfile, connect, disconnect } = useVpn()
+    const { connectionState, currentProfile, stats, profiles, subscriptions, selectProfile, connect, disconnect } = useVpn()
+    const orderedProfiles = orderProfilesBySubscription(profiles, subscriptions)
     const [elapsedTime, setElapsedTime] = useState(0)
     const [latency, setLatency] = useState<number | null>(null)
     const [isTestingLatency, setIsTestingLatency] = useState(false)
     const [latencyTestMode, setLatencyTestMode] = useState<LatencyTestMode>('manual')
     const [realPublicIp, setRealPublicIp] = useState<string | null>(null)
-    const latencyIntervalRef = useRef<NodeJS.Timeout | null>(null)
+    const latencyIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
     // Fetch real public IP when disconnected
     useEffect(() => {
@@ -32,7 +36,7 @@ export default function HomeScreen() {
 
     // Update connection time - smooth local 1s timer when connected
     useEffect(() => {
-        let interval: NodeJS.Timeout | null = null
+        let interval: ReturnType<typeof setInterval> | null = null
         if (connectionState === 'connected') {
             const initialTime = stats.connectedTime || 0
             const startTime = Date.now() - initialTime
@@ -50,11 +54,12 @@ export default function HomeScreen() {
 
     // Test latency function
     const testLatency = useCallback(async () => {
-        if (connectionState !== 'connected' || !isV2rayProtocol) return
+        const api = window.electronAPI
+        if (!api || connectionState !== 'connected' || !isV2rayProtocol) return
 
         setIsTestingLatency(true)
         try {
-            const latencyResult = await window.electronAPI.testLatency()
+            const latencyResult = await api.testLatency()
 
             if (latencyResult.success && latencyResult.latency > 0) {
                 setLatency(latencyResult.latency)
@@ -157,22 +162,8 @@ export default function HomeScreen() {
             {/* Profile Selector - Shown when disconnected or error */}
             {profiles.length > 0 && (connectionState === 'disconnected' || connectionState === 'error') && (
                 <div className="profile-selector-container">
-                    <select
-                        className="form-input form-select compact-select"
-                        value={currentProfile?.id || ''}
-                        onChange={(e) => {
-                            const profile = profiles.find(p => p.id === e.target.value)
-                            if (profile) selectProfile(profile)
-                        }}
-                        title="Select VPN Profile"
-                    >
-                        <option value="">Select Profile...</option>
-                        {profiles.map(profile => (
-                            <option key={profile.id} value={profile.id}>
-                                {profile.name}
-                            </option>
-                        ))}
-                    </select>
+                    <ProfilePicker profiles={orderedProfiles} subscriptions={subscriptions}
+                        currentProfile={currentProfile} onSelect={selectProfile} />
                 </div>
             )}
 
@@ -197,6 +188,7 @@ export default function HomeScreen() {
                     {currentProfile && (
                         <p className="connection-status-detail">
                             {currentProfile.name} • {connectionState === 'connected' ? stats.publicIp : currentProfile.serverAddress}
+                            {' '}<SubscriptionBadge profile={currentProfile} subscriptions={subscriptions} />
                         </p>
                     )}
                 </div>

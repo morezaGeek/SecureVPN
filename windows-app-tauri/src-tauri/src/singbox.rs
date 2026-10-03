@@ -52,7 +52,7 @@ pub async fn resolve_hostname_to_ip(host: &str) -> String {
     }
 
     let addr_str = format!("{}:443", host);
-    if let Ok(addrs) = tokio::net::lookup_host(&addr_str).await {
+    if let Ok(Ok(addrs)) = tokio::time::timeout(Duration::from_secs(4), tokio::net::lookup_host(&addr_str)).await {
         for addr in addrs {
             if addr.is_ipv4() {
                 return addr.ip().to_string();
@@ -61,6 +61,20 @@ pub async fn resolve_hostname_to_ip(host: &str) -> String {
     }
 
     host.to_string()
+}
+
+fn server_cidr(address: &str) -> Option<String> {
+    address.parse::<std::net::IpAddr>().ok().map(|ip| {
+        format!("{}/{}", ip, if ip.is_ipv4() { 32 } else { 128 })
+    })
+}
+
+fn server_direct_rules(host: &str, address: &str) -> Vec<Value> {
+    let mut rules = vec![json!({ "domain": [host], "outbound": "direct" })];
+    if let Some(cidr) = server_cidr(address) {
+        rules.push(json!({ "ip_cidr": [cidr], "outbound": "direct" }));
+    }
+    rules
 }
 
 fn unescape_percent_encoding(s: &str) -> String {
@@ -327,6 +341,7 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
             "host": host
         });
     } else if transport == "xhttp" {
+        let extra = singbox_cfg.get("extra").cloned().unwrap_or(json!({}));
         let path = singbox_cfg.get("path")
             .and_then(|v| v.as_str())
             .map(|s| s.trim())
@@ -336,6 +351,7 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
             .and_then(|v| v.as_str())
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
+            .or_else(|| extra.get("mode").and_then(Value::as_str).filter(|s| !s.is_empty()))
             .unwrap_or("auto");
 
         outbound["transport"] = json!({
@@ -344,6 +360,13 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
             "path": path,
             "host": host
         });
+        if let Some(padding) = extra.get("xPaddingBytes").or_else(|| extra.get("x_padding_bytes")) {
+            let range = padding.as_str().map(str::to_string).unwrap_or_else(|| padding.to_string());
+            if !regex::Regex::new(r"^\d+(?:-\d+)?$").unwrap().is_match(&range) {
+                return Err("Invalid XHTTP xPaddingBytes range".into());
+            }
+            outbound["transport"]["x_padding_bytes"] = json!(range);
+        }
     } else if transport == "grpc" {
         outbound["transport"] = json!({
             "type": "grpc",
@@ -436,6 +459,7 @@ pub async fn build_singbox_batch_test_config(
 pub async fn build_singbox_test_config(profile: &Value, config_path: &Path) -> Result<(), String> {
     let (raw_server_address, server_ip, outbound) = build_singbox_outbound(profile).await?;
 
+    let rules = server_direct_rules(&raw_server_address, &server_ip);
     let full_config = json!({
         "log": {
             "level": "error",
@@ -456,10 +480,7 @@ pub async fn build_singbox_test_config(profile: &Value, config_path: &Path) -> R
         ],
         "route": {
             "default_domain_resolver": "direct-dns",
-            "rules": [
-                { "domain": [raw_server_address], "outbound": "direct" },
-                { "ip_cidr": [format!("{}/32", server_ip)], "outbound": "direct" }
-            ],
+            "rules": rules,
             "final": "proxy"
         }
     });
@@ -596,8 +617,8 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
     for ip in &custom_ips {
         route_exclude_addresses.push(json!(ip));
     }
-    if server_ip.parse::<std::net::IpAddr>().is_ok() {
-        route_exclude_addresses.push(json!(format!("{}/32", server_ip)));
+    if let Some(cidr) = server_cidr(&server_ip) {
+        route_exclude_addresses.push(json!(cidr));
     }
 
     let mut route_rules = vec![
@@ -606,9 +627,8 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
             "sniffer": ["http", "tls", "quic"]
         }),
         json!({ "protocol": "dns", "action": "hijack-dns" }),
-        json!({ "domain": [raw_server_address], "outbound": "direct" }),
-        json!({ "ip_cidr": [format!("{}/32", server_ip)], "outbound": "direct" }),
     ];
+    route_rules.extend(server_direct_rules(&raw_server_address, &server_ip));
 
     if !custom_domains.is_empty() {
         route_rules.push(json!({
@@ -730,6 +750,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
 
 fn is_noisy_singbox_log(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
+    if lower.contains("fatal") { return false; }
     lower.contains("connection:")
         || lower.contains("raw-read")
         || lower.contains("raw-write")
@@ -753,6 +774,14 @@ pub async fn spawn_singbox(
     config_path: PathBuf,
     is_running: Arc<AtomicBool>,
 ) -> Result<u32, String> {
+    let check = Command::new(&bin_path)
+        .args(["check", "-c"]).arg(&config_path)
+        .creation_flags(0x08000000)
+        .output().await.map_err(|e| format!("Cannot validate sing-box configuration: {}", e))?;
+    if !check.status.success() {
+        let error = strip_ansi_codes(&String::from_utf8_lossy(&check.stderr));
+        return Err(format!("Invalid VPN configuration: {}", error.trim()));
+    }
     let mut child = Command::new(&bin_path)
         .arg("run")
         .arg("-c")
@@ -842,6 +871,50 @@ pub async fn run_tcp_ping(host: String, port: u16) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_failure_never_creates_hostname_cidr_and_ipv6_uses_host_prefix() {
+        assert_eq!(server_cidr("s1.rahanetmci.com"), None);
+        assert_eq!(server_cidr("91.107.158.74"), Some("91.107.158.74/32".into()));
+        assert_eq!(server_cidr("2001:db8::1"), Some("2001:db8::1/128".into()));
+        assert_eq!(server_direct_rules("s1.rahanetmci.com", "s1.rahanetmci.com"),
+            vec![json!({ "domain": ["s1.rahanetmci.com"], "outbound": "direct" })]);
+        assert_eq!(server_direct_rules("example.com", "2001:db8::1")[1]["ip_cidr"], json!(["2001:db8::1/128"]));
+    }
+
+    #[test]
+    fn fatal_connection_errors_are_not_hidden_by_noise_filter() {
+        assert!(!is_noisy_singbox_log("FATAL initialize router: context deadline exceeded"));
+        assert!(is_noisy_singbox_log("connection download: context canceled"));
+    }
+
+    #[tokio::test]
+    async fn xhttp_keeps_subscription_padding_and_explicit_mode_wins() {
+        let mut profile = json!({"protocol":"vless","serverAddress":"192.0.2.1","port":443,
+            "singboxConfig":{"uuid":"test-user","transport":"xhttp","security":"tls",
+                "mode":"packet-up","extra":{"mode":"auto","xPaddingBytes":"100-1000"}}});
+        let (_, _, outbound) = build_singbox_outbound(&profile).await.unwrap();
+        assert_eq!(outbound["transport"]["mode"], "packet-up");
+        assert_eq!(outbound["transport"]["x_padding_bytes"], "100-1000");
+        profile["singboxConfig"]["extra"]["xPaddingBytes"] = json!("invalid");
+        assert!(build_singbox_outbound(&profile).await.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "Local private fixture export; does not start a VPN or change system proxy"]
+    async fn diagnostics_export_profiles() {
+        let fixture = std::env::var("SECUREVPN_DIAGNOSTICS_FIXTURE").expect("fixture path");
+        let directory = PathBuf::from(std::env::var("SECUREVPN_DIAGNOSTICS_OUTPUT").expect("output directory"));
+        let profiles: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+        std::fs::create_dir_all(&directory).unwrap();
+        for (index, profile) in profiles.iter().enumerate() {
+            assert_ne!(profile["name"], "Direct-To-Server", "Excluded by user");
+            build_singbox_config(profile, &directory.join(format!("full-{}.private.json", index))).await.unwrap();
+        }
+        let map = build_singbox_batch_test_config(&profiles, &directory.join("batch.private.json"), 23100).await.unwrap();
+        std::fs::write(directory.join("port-map.private.json"), serde_json::to_string(&map).unwrap()).unwrap();
+        println!("Exported {} full configurations and {} isolated proxy routes", profiles.len(), map.len());
+    }
 
     #[test]
     fn test_unescape_percent_encoding() {
@@ -1081,4 +1154,3 @@ mod tests {
         let _ = std::fs::remove_file(&cfg_path);
     }
 }
-

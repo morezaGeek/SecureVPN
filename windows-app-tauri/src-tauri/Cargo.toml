@@ -1,6 +1,6 @@
 [package]
 name = "secure-vpn"
-version = "2.0.30"
+version = "2.0.32"
 description = "Secure VPN Desktop Application"
 authors = ["Secure VPN"]
 edition = "2021"

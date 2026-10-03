@@ -23,6 +23,7 @@ app/
 .gradle/
 build/
 scratch/
+**/*.private.*
 SecureVPN-Portable/
 windows-app-backup-*/
 sfa_extracted/
@@ -37,3 +38,4 @@ libbox_aar/
 **/dist-electron/
 **/release/
 **/*.tsbuildinfo
+.env

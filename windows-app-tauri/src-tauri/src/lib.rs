@@ -3,6 +3,7 @@ pub mod iran_ips;
 mod openconnect;
 mod singbox;
 mod state;
+mod updater;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -14,6 +15,14 @@ use tokio::sync::Mutex;
 use crate::commands::*;
 use crate::state::VpnState;
 
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState {
@@ -23,11 +32,16 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        // Detect a relaunch before setup can alter proxy settings or start another VPN.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .manage(app_state)
+        .manage(updater::UpdateState::default())
         .setup(|app| {
             // Ensure system proxy is cleared on startup
             commands::set_system_proxy(false, None);
@@ -73,11 +87,7 @@ pub fn run() {
             let _tray = tray_builder
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        show_main_window(app);
                     }
                     "quit" => {
                         commands::set_system_proxy(false, None);
@@ -106,11 +116,7 @@ pub fn run() {
                             ..
                         } => {
                             let app = tray.app_handle();
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.unminimize();
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                            show_main_window(app);
                         }
                         _ => {}
                     }
@@ -143,6 +149,8 @@ pub fn run() {
             tray_update_menu,
             open_external_url,
             fetch_original_ip,
+            updater::app_check_update,
+            updater::app_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

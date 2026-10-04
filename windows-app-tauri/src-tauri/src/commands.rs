@@ -257,6 +257,9 @@ pub async fn vpn_connect(
     profile: Value,
 ) -> Result<Value, String> {
     let mut s = state.vpn_state.lock().await;
+    if app.state::<crate::updater::UpdateState>().installing.load(Ordering::SeqCst) {
+        return Ok(json!({ "success": false, "error": "Update installation is starting" }));
+    }
     let mut pid_lock = state.active_pid.lock().await;
 
     // Disconnect if already connected

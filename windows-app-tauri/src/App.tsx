@@ -5,7 +5,9 @@ import HomeScreen from './screens/HomeScreen'
 import ProfilesScreen from './screens/ProfilesScreen'
 import SettingsScreen from './screens/SettingsScreen'
 import LogsScreen from './screens/LogsScreen'
-import { Home, User, Settings, FileText, Minus, Square, X, Shield, Github } from 'lucide-react'
+import { Home, User, Settings, FileText, Minus, Square, X, Shield } from 'lucide-react'
+import { UpdateProvider } from './context/UpdateContext'
+import UpdateButton from './components/UpdateButton'
 import packageJson from '../package.json'
 
 type Screen = 'home' | 'profiles' | 'settings' | 'logs'
@@ -26,6 +28,7 @@ function App() {
     return (
         <ThemeProvider>
             <VpnProvider>
+                <UpdateProvider>
                 <div className="app-container">
                     {/* Title Bar */}
                     <div className="title-bar" data-tauri-drag-region>
@@ -83,34 +86,7 @@ function App() {
                                 <span className="version-text" style={{ fontSize: '0.8rem' }}>
                                     v{packageJson.version}
                                 </span>
-                                <button
-                                    onClick={() => window.electronAPI?.openExternal?.('https://github.com/morezaGeek/SecureVPN/releases')}
-                                    title="GitHub Releases & Updates"
-                                    style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '4px',
-                                        background: 'transparent',
-                                        border: 'none',
-                                        color: 'var(--text-secondary)',
-                                        fontSize: '0.78rem',
-                                        cursor: 'pointer',
-                                        padding: '3px 6px',
-                                        borderRadius: '4px',
-                                        transition: 'all 0.2s',
-                                    }}
-                                    onMouseEnter={e => {
-                                        e.currentTarget.style.color = 'var(--primary)'
-                                        e.currentTarget.style.background = 'var(--surface-light)'
-                                    }}
-                                    onMouseLeave={e => {
-                                        e.currentTarget.style.color = 'var(--text-secondary)'
-                                        e.currentTarget.style.background = 'transparent'
-                                    }}
-                                >
-                                    <Github size={13} />
-                                    <span>Releases</span>
-                                </button>
+                                <UpdateButton compact />
                             </div>
                         </nav>
 
@@ -123,6 +99,7 @@ function App() {
                         </main>
                     </div>
                 </div>
+                </UpdateProvider>
             </VpnProvider>
         </ThemeProvider>
     )

@@ -17,3 +17,9 @@ SHA256: `DAF84EAB301B4248A0819C7DC4781E1798FFFCCBDEDCC7368BF1E42CAF111C9D`.
 انتشار در2026-10-03 تکمیل شد: [Windows v2.0.32](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.32)، tag روی کامیت `8f59c382e41ea570c4fd7d6e3f7a7efaad685f18`. سورس روی main پوش و ریلیز عمومی شد؛ فایل آپلودشده با دانلود مجدد و SHA256 بررسی شد.
 
 [دانلود نصب‌کننده](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.32/SecureVPN-v2.0.32-Setup.exe).
+
+## قرارداد آپدیت داخل اپ، از Windows2.0.34
+
+اپ فقط ریلیزهای عمومی stable همین مخزن با tag `v<semver>` و asset دقیق `SecureVPN-v<semver>-Setup.exe` را برای ارتقا می‌پذیرد. فایل باید به‌عنوان GitHub release asset آپلود شود تا metadata آن `digest` معتبر SHA256 داشته باشد. draft/prerelease، فایل Android، نسخهٔ برابر/قدیمی و URL خارجی نادیده گرفته می‌شوند. هیچ PAT در کلاینت آپدیت وجود ندارد.
+
+آخرین فایل محلی ساخته‌شده2.0.34 است؛ هنوز روی GitHub منتشر نشده. برای انتشار، helper2.0.32 را بدون تطبیق نسخه/نام/hash اجرا نکن. SHA256 فایل34: `BC4B501E084CFF4DE8DC2C86F2273709FB46256E2D0425BA94563BF00AB1B326`، حجم30,339,736بایت. قرارداد و آزمون‌ها در `windows-app-tauri/src-tauri/installer/README.md` ثبت شده‌اند.

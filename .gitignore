@@ -9,6 +9,7 @@
 *.log
 *.txt
 *.ps1
+!windows-app-tauri/scripts/test-installer-maintenance.ps1
 vpn_profiles_backup.xml
 build.gradle.kts
 gradle.properties

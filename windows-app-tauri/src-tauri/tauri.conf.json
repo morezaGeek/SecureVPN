@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Secure VPN",
-  "version": "2.0.32",
+  "version": "2.0.34",
   "identifier": "com.securevpn.windows",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,8 +34,10 @@
       "nsis"
     ],
     "windows": {
+      "allowDowngrades": false,
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "template": "installer/installer.nsi"
       }
     },
     "icon": [

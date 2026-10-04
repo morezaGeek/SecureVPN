@@ -9,6 +9,9 @@ export function setupTauriBridge() {
     const appWindow = getCurrentWindow()
 
     const tauriAPI: ElectronAPI = {
+        checkUpdate: () => invoke('app_check_update'),
+        installUpdate: () => invoke('app_install_update'),
+        onUpdateProgress: (callback) => listen('app:updateProgress', event => callback(event.payload as import('../types/electron').UpdateProgress)),
         minimize: async () => {
             try {
                 await invoke('app_minimize')

@@ -20,7 +20,13 @@ export interface VpnLog {
     timestamp: number
 }
 
+export interface UpdateInfo { version: string }
+export interface UpdateProgress { downloaded: number; total: number; phase: 'downloading' | 'installing' }
+
 export interface ElectronAPI {
+    checkUpdate: () => Promise<UpdateInfo | null>
+    installUpdate: () => Promise<void>
+    onUpdateProgress: (callback: (progress: UpdateProgress) => void) => Promise<() => void>
     minimize: () => Promise<void>
     maximize: () => Promise<void>
     close: () => Promise<void>

@@ -124,6 +124,9 @@
 - درخواست تکمیلی همین نسخه: دکمهٔ Check for Updates در پایین Sidebar همیشه در دسترس است؛ به‌جای بازکردن صفحهٔ Releases، metadata را با backend واقعی بررسی می‌کند. Checking، Up to date و خطا نمایش داده می‌شوند؛ با پیدا شدن نسخهٔ جدید، دکمه به Update تبدیل می‌شود. بررسی نصب خودکار انجام نمی‌دهد؛ نصب با کلیک بعدی کاربر است. دکمهٔ Settings/About همین مسیر را حفظ می‌کند و footer برای متن کامل دو ردیف دارد. تست رفتاری، بررسی دستی دوم پس از نبود آپدیت، قفل هنگام بررسی و نصب فقط با کلیک را تأیید کرد.
 - مرجع semantics Range/206 و If-Range: [RFC9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-14)، [If-Range](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.5).
 
+- انتشار37 تکمیل شد: سورس `c2d3e76c3869f34c5eb1b5995f69034fd1889769` روی main پوش و tag v2.0.37 روی همان commit تأیید شد. [ریلیز عمومی37](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.37) و [installer](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.37/SecureVPN-v2.0.37-Setup.exe)، 36,849,111بایت، SHA256 `A3F443DC2A11BF378CFE5C3306228E0C710D11F10C4C436B0348C28D6AAE39ED`. فایل draft قبل از عمومی‌شدن دانلود مجدد و hash، سپس digest/اندازه/tag عمومی تأیید شدند. دکمهٔ Check for Updates هم در همان build نهایی37 است؛ React workflow و TypeScript بعد از افزودن آن مجدداً پاس شدند.
+- آزمون خودکار کلیک Update در نسخهٔ نصب‌شده36 همچنان به دسترسی ابزار به اپ Administrator محدود است؛ نتیجهٔ ارتقای واقعی36به37 را تأیید نمی‌کنیم.37 دستی نصب نشده است؛ کاربر می‌تواند در36 از Settings/About > Check for Updates مسیر واقعی ارتقا را تست کند. دانلود موازی برای آپدیت‌های بعدی از37 فعال خواهد بود.
+
 ### Windows v2.0.36 — پینگ و حفظ ساب، 2026-10-06
 
 - کاربر دانلود و نصب واقعی آپدیت35 و اتصال Hamed را تأیید کرد. تصویر جدید نسخهٔ نصب‌شده35 را نشان می‌دهد؛ دیگر وضعیت «هنوز34» جاری نیست.

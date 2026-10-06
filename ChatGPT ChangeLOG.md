@@ -2,13 +2,13 @@
 
 این فایل برای تحویل ادامهٔ توسعهٔ SecureVPN به Antigravity نوشته شده است.
 
-آخرین به‌روزرسانی: **۲۰۲۶-۱۰-۰۶، منطقهٔ زمانی Asia/Tehran**. آزمون‌های نسخهٔ1.3.63 از شب۲اکتبر شروع شدند؛ اصلاحات و آزمون نهایی1.3.65 در۳اکتبر تکمیل شدند. Windows2.0.37 در۶اکتبر برای بایپس و دانلود موازی آماده شد؛ Android در این مرحله تغییر نکرد.
+آخرین به‌روزرسانی: **۲۰۲۶-۱۰-۰۶، منطقهٔ زمانی Asia/Tehran**. آزمون‌های نسخهٔ1.3.63 از شب۲اکتبر شروع شدند؛ اصلاحات و آزمون نهایی1.3.65 در۳اکتبر تکمیل شدند. Windows2.0.37 در۶اکتبر برای بایپس، دانلود موازی و Check for Updates منتشر شد؛ Android در این مرحله تغییر نکرد.
 
 ## وضعیت فعلی و دامنهٔ این همکاری
 
 - کار این گفتگو از وضعیت Android **1.3.55 / versionCode 185** شروع شد و آخرین نسخهٔ ساخته‌شده **1.3.65 / versionCode 195** است.
 - مرحلهٔ نخست روی **اندروید** تا1.3.65 انجام شد؛ سپس طبق درخواست کاربر توسعهٔ **Windows/Tauri** به2.0.31 و2.0.32 منتقل شد. آزمون‌های اولیهٔ Android با Windows CLI فقط پراکسی محلی داشتند؛ در مرحلهٔ Windows2.0.31، تونل واقعی سیستم نیز آزمایش و پس از هر مورد کاملاً بسته شد.
-- آخرین نصب‌کنندهٔ Windows: [SecureVPN-v2.0.37-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.37-Setup.exe>)، x64، **36,849,111 بایت**، حدود35.14MiB، SHA256 `A3F443DC2A11BF378CFE5C3306228E0C710D11F10C4C436B0348C28D6AAE39ED`. برای انتشار قبل از آزمون Update از36 آماده است.
+- آخرین نصب‌کنندهٔ Windows: [SecureVPN-v2.0.37-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.37-Setup.exe>)، x64، **36,849,111 بایت**، حدود35.14MiB، SHA256 `A3F443DC2A11BF378CFE5C3306228E0C710D11F10C4C436B0348C28D6AAE39ED`. [ریلیز عمومی37](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.37) منتشر شد؛ آزمون ارتقای واقعی36به37 هنوز تأیید نشده است.
 - این گزارش تغییرات انجام‌شده در همین همکاری را پوشش می‌دهد. تاریخچهٔ قدیمی‌تر و معماری اولیهٔ پروژه در [DEVELOPMENT_SUMMARY.md](<H:/Antigravity Projects/VPN APP/DEVELOPMENT_SUMMARY.md>) موجود است؛ تمام تغییرات تاریخی آن سند به ChatGPT این گفتگو نسبت داده نشده‌اند.
 - آخرین APK: [SecureVPN-v1.3.65.apk](<H:/Antigravity Projects/VPN APP/SecureVPN-v1.3.65.apk>)، arm64-v8a، حجم **35,896,236 بایت**، حدود34.23MiB.
 - SHA256 همین APK: `95B1CA22905BA7B207F4CF367B1CE8F97654CB7B66DBB5FD515274F629F92E04`. گواهی امضای قبلی حفظ شد؛ روی گوشی با حفظ داده نصب شد.
@@ -32,6 +32,9 @@
 - Android، core1.14.2-lx.11 و تنظیمات MTU/DNS اتصال اصلی تغییر نکردند؛ توکن/fixtureهای خصوصی و فایل‌های نامرتبط وارد Git نمی‌شوند.
 - درخواست تکمیلی همین نسخه: دکمهٔ Check for Updates در پایین Sidebar همیشه در دسترس است؛ به‌جای بازکردن صفحهٔ Releases، metadata را با backend واقعی بررسی می‌کند. Checking، Up to date و خطا نمایش داده می‌شوند؛ با پیدا شدن نسخهٔ جدید، دکمه به Update تبدیل می‌شود. بررسی نصب خودکار انجام نمی‌دهد؛ نصب با کلیک بعدی کاربر است. دکمهٔ Settings/About همین مسیر را حفظ می‌کند و footer برای متن کامل دو ردیف دارد. تست رفتاری، بررسی دستی دوم پس از نبود آپدیت، قفل هنگام بررسی و نصب فقط با کلیک را تأیید کرد.
 - مرجع semantics Range/206 و If-Range: [RFC9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-14)، [If-Range](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.5).
+
+- انتشار37 تکمیل شد: سورس `c2d3e76c3869f34c5eb1b5995f69034fd1889769` روی main پوش و tag v2.0.37 روی همان commit تأیید شد. [ریلیز عمومی37](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.37) و [installer](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.37/SecureVPN-v2.0.37-Setup.exe)، 36,849,111بایت، SHA256 `A3F443DC2A11BF378CFE5C3306228E0C710D11F10C4C436B0348C28D6AAE39ED`. فایل draft قبل از عمومی‌شدن دانلود مجدد و hash، سپس digest/اندازه/tag عمومی تأیید شدند. دکمهٔ Check for Updates هم در همان build نهایی37 است؛ React workflow و TypeScript بعد از افزودن آن مجدداً پاس شدند.
+- آزمون خودکار کلیک Update در نسخهٔ نصب‌شده36 همچنان به دسترسی ابزار به اپ Administrator محدود است؛ نتیجهٔ ارتقای واقعی36به37 را تأیید نمی‌کنیم.37 دستی نصب نشده است؛ کاربر می‌تواند در36 از Settings/About > Check for Updates مسیر واقعی ارتقا را تست کند. دانلود موازی برای آپدیت‌های بعدی از37 فعال خواهد بود.
 
 ## Windows 2.0.36 — پینگ، حفظ صفحه/ساب و دانلود آپدیت، 2026-10-06
 

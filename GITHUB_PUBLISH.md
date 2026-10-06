@@ -2,10 +2,14 @@
 
 مخزن: `morezaGeek/SecureVPN`، شاخهٔ `main`.
 
-## Windows2.0.37 — آمادهٔ انتشار، 2026-10-06
+## آخرین انتشار Windows2.0.37، 2026-10-06
 
 [SecureVPN-v2.0.37-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.37-Setup.exe>)، x64، **36,849,111 بایت**، حدود35.14MiB، SHA256 `A3F443DC2A11BF378CFE5C3306228E0C710D11F10C4C436B0348C28D6AAE39ED`.
-helper محلی `scratch/windows-diagnostics/publish-2.0.37.cjs`؛ سورس ابتدا push، سپس asset draft/download/hash و انتشار عمومی. تصویر کاربر نصب36 را تأیید می‌کند ولی مسیر ارتقا مشخص نشده.37 هنوز دستی نصب نشده و ابتدا باید منتشر شود.
+helper محلی `scratch/windows-diagnostics/publish-2.0.37.cjs`؛ سورس `c2d3e76c3869f34c5eb1b5995f69034fd1889769` ابتدا push، سپس asset draft/download/hash و انتشار عمومی/digest/tag تأیید شدند. تصویر کاربر نصب36 را تأیید می‌کند.37 هنوز دستی نصب نشده است.
+
+- انتشار37 تکمیل شد: سورس `c2d3e76c3869f34c5eb1b5995f69034fd1889769` روی main پوش و tag v2.0.37 روی همان commit تأیید شد. [ریلیز عمومی37](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.37) و [installer](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.37/SecureVPN-v2.0.37-Setup.exe)، 36,849,111بایت، SHA256 `A3F443DC2A11BF378CFE5C3306228E0C710D11F10C4C436B0348C28D6AAE39ED`. فایل draft قبل از عمومی‌شدن دانلود مجدد و hash، سپس digest/اندازه/tag عمومی تأیید شدند. دکمهٔ Check for Updates هم در همان build نهایی37 است؛ React workflow و TypeScript بعد از افزودن آن مجدداً پاس شدند.
+- آزمون خودکار کلیک Update در نسخهٔ نصب‌شده36 همچنان به دسترسی ابزار به اپ Administrator محدود است؛ نتیجهٔ ارتقای واقعی36به37 را تأیید نمی‌کنیم.37 دستی نصب نشده است؛ کاربر می‌تواند در36 از Settings/About > Check for Updates مسیر واقعی ارتقا را تست کند. دانلود موازی برای آپدیت‌های بعدی از37 فعال خواهد بود.
+
 
 دانلود موازی متعلق به کد37 است؛ دانلود خود37 از client36 همچنان تک‌اتصال خواهد بود. برای A/B همان فایل36،86.47ثانیه تک‌اتصال و12.52ثانیه موازی و hash صحیح تأیید شدند.
 

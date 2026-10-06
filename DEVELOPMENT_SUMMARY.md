@@ -124,6 +124,9 @@
 - اعتبارسنجی نهایی:18تست Rust موفق،4آزمون شبکه/fixture پیش‌فرض ignored؛ TypeScript، React workflow و Release build موفق. تست React در سورس tests/ping-workflow.test.tsx، دستور npm run test:workflows؛ دامنهٔ ساب، Stop، جواب دیررس، کلیک تکراری، حفظ انتخاب با جابه‌جایی/راه‌اندازی و تغییر اتصال را بررسی می‌کند. react-test-renderer فقط devDependency است و داخل اپ بسته‌بندی نمی‌شود.
 - ابتدا push و انتشار36 روی GitHub، سپس بررسی تشخیص Update در35؛ نسخهٔ جدید قبل از آن دستی نصب نمی‌شود. Android تغییر نکرده و فایل‌های خصوصی/توکن/fixture وارد Git نشده‌اند.
 
+- انتشار36 تکمیل شد: سورس `057dd859b4158c8e1e160ceaf4e335be0b9d598b` روی main پوش و tag v2.0.36 روی همان commit تأیید شد. [ریلیز عمومی36](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.36) و [installer](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.36/SecureVPN-v2.0.36-Setup.exe)، 36,785,885بایت، SHA256 `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`. فایل draft قبل از عمومی‌شدن دانلود مجدد و hash، سپس digest/اندازه/tag عمومی تأیید شدند.
+- بررسی UI بعد از انتشار: نسخهٔ نصب‌شده35 در Profiles/Sale باز است و هنوز Releases نشان می‌دهد؛ اجرای Administrator طبق پیام ابزار higher Windows integrity دسترسی به دکمه‌ها را محدود کرده است. از کاربر خواسته شد در35 Check for Updates را بزند. این آزمون تا دریافت پاسخ کاربر تأییدشده نیست؛36 دستی نصب نشده است.
+
 ### Windows v2.0.35 — 2026-10-06 — اصلاح Speedtest و Hamed
 
 - VLESS encryption از لینک وارد مدل می‌شد ولی در JSON هسته جا می‌ماند؛ اکنون مقدار اصلی فعال به outbound منتقل می‌شود. هستهٔ قبلی 1.14.0-lx.15 این فیلد را رد می‌کند؛ هستهٔ رسمی pinned1.14.2-lx.11 با checksum تأییدشده جایگزین شد.

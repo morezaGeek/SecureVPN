@@ -2,10 +2,13 @@
 
 مخزن: `morezaGeek/SecureVPN`، شاخهٔ `main`.
 
-## Windows2.0.36 — آمادهٔ انتشار، 2026-10-06
+## آخرین انتشار Windows2.0.36، 2026-10-06
 
 [SecureVPN-v2.0.36-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.36-Setup.exe>)، x64، **36,785,885 بایت**، حدود35.08MiB. SHA256: `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`.
-helper محلی `scratch/windows-diagnostics/publish-2.0.36.cjs`؛ سورس ابتدا push، فایل در draft آپلود/download/hash و سپس منتشر می‌شود. نسخهٔ نصب‌شده35 باقی می‌ماند تا نشان Update بعد از انتشار36 بررسی شود؛ نصب دستی36 انجام نشده است.
+helper محلی `scratch/windows-diagnostics/publish-2.0.36.cjs`؛ سورس `057dd859b4158c8e1e160ceaf4e335be0b9d598b` ابتدا push، فایل در draft آپلود/download/hash و سپس عمومی و digest/tag تأیید شدند. نسخهٔ نصب‌شده35 باقی می‌ماند تا نشان Update بعد از انتشار36 بررسی شود؛ نصب دستی36 انجام نشده است.
+
+- انتشار36 تکمیل شد: سورس `057dd859b4158c8e1e160ceaf4e335be0b9d598b` روی main پوش و tag v2.0.36 روی همان commit تأیید شد. [ریلیز عمومی36](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.36) و [installer](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.36/SecureVPN-v2.0.36-Setup.exe)، 36,785,885بایت، SHA256 `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`. فایل draft قبل از عمومی‌شدن دانلود مجدد و hash، سپس digest/اندازه/tag عمومی تأیید شدند.
+- بررسی UI بعد از انتشار: نسخهٔ نصب‌شده35 در Profiles/Sale باز است و هنوز Releases نشان می‌دهد؛ اجرای Administrator طبق پیام ابزار higher Windows integrity دسترسی به دکمه‌ها را محدود کرده است. از کاربر خواسته شد در35 Check for Updates را بزند. این آزمون تا دریافت پاسخ کاربر تأییدشده نیست؛36 دستی نصب نشده است.
 
 کاربر دانلود/نصب35 را در۶اکتبر تأیید کرد؛ تصویر UI نسخه35 را نشان می‌دهد. نتیجهٔ آزمون35 تکمیل‌شده است؛ این به‌تنهایی آزمون ارتقای35به36 نیست.
 

@@ -8,7 +8,7 @@
 
 - کار این گفتگو از وضعیت Android **1.3.55 / versionCode 185** شروع شد و آخرین نسخهٔ ساخته‌شده **1.3.65 / versionCode 195** است.
 - مرحلهٔ نخست روی **اندروید** تا1.3.65 انجام شد؛ سپس طبق درخواست کاربر توسعهٔ **Windows/Tauri** به2.0.31 و2.0.32 منتقل شد. آزمون‌های اولیهٔ Android با Windows CLI فقط پراکسی محلی داشتند؛ در مرحلهٔ Windows2.0.31، تونل واقعی سیستم نیز آزمایش و پس از هر مورد کاملاً بسته شد.
-- آخرین نصب‌کنندهٔ Windows: [SecureVPN-v2.0.36-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.36-Setup.exe>)، x64، **36,785,885 بایت**، حدود35.08MiB. SHA256: `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`. کاربر نصب آپدیت35 را تأیید کرد؛36 برای انتشار قبل از آزمون Update آماده شد.
+- آخرین نصب‌کنندهٔ Windows: [SecureVPN-v2.0.36-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.36-Setup.exe>)، x64، **36,785,885 بایت**، حدود35.08MiB. SHA256: `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`. کاربر نصب آپدیت35 را تأیید کرد؛[ریلیز عمومی36](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.36) منتشر شد؛ آزمون UI ارتقای35به36 در انتظار پاسخ کاربر است.
 - این گزارش تغییرات انجام‌شده در همین همکاری را پوشش می‌دهد. تاریخچهٔ قدیمی‌تر و معماری اولیهٔ پروژه در [DEVELOPMENT_SUMMARY.md](<H:/Antigravity Projects/VPN APP/DEVELOPMENT_SUMMARY.md>) موجود است؛ تمام تغییرات تاریخی آن سند به ChatGPT این گفتگو نسبت داده نشده‌اند.
 - آخرین APK: [SecureVPN-v1.3.65.apk](<H:/Antigravity Projects/VPN APP/SecureVPN-v1.3.65.apk>)، arm64-v8a، حجم **35,896,236 بایت**، حدود34.23MiB.
 - SHA256 همین APK: `95B1CA22905BA7B207F4CF367B1CE8F97654CB7B66DBB5FD515274F629F92E04`. گواهی امضای قبلی حفظ شد؛ روی گوشی با حفظ داده نصب شد.
@@ -32,6 +32,9 @@
 - دو OpenConnect هم TCP پاسخ دادند:218 و94ms؛ این اعداد احراز هویت/ترافیک تونل را تأیید نمی‌کنند.
 - اعتبارسنجی نهایی:18تست Rust موفق،4آزمون شبکه/fixture پیش‌فرض ignored؛ TypeScript، React workflow و Release build موفق. تست React در سورس tests/ping-workflow.test.tsx، دستور npm run test:workflows؛ دامنهٔ ساب، Stop، جواب دیررس، کلیک تکراری، حفظ انتخاب با جابه‌جایی/راه‌اندازی و تغییر اتصال را بررسی می‌کند. react-test-renderer فقط devDependency است و داخل اپ بسته‌بندی نمی‌شود.
 - ابتدا push و انتشار36 روی GitHub، سپس بررسی تشخیص Update در35؛ نسخهٔ جدید قبل از آن دستی نصب نمی‌شود. Android تغییر نکرده و فایل‌های خصوصی/توکن/fixture وارد Git نشده‌اند.
+
+- انتشار36 تکمیل شد: سورس `057dd859b4158c8e1e160ceaf4e335be0b9d598b` روی main پوش و tag v2.0.36 روی همان commit تأیید شد. [ریلیز عمومی36](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.36) و [installer](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.36/SecureVPN-v2.0.36-Setup.exe)، 36,785,885بایت، SHA256 `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`. فایل draft قبل از عمومی‌شدن دانلود مجدد و hash، سپس digest/اندازه/tag عمومی تأیید شدند.
+- بررسی UI بعد از انتشار: نسخهٔ نصب‌شده35 در Profiles/Sale باز است و هنوز Releases نشان می‌دهد؛ اجرای Administrator طبق پیام ابزار higher Windows integrity دسترسی به دکمه‌ها را محدود کرده است. از کاربر خواسته شد در35 Check for Updates را بزند. این آزمون تا دریافت پاسخ کاربر تأییدشده نیست؛36 دستی نصب نشده است.
 
 ## Windows 2.0.35 — Speedtest و سابسکریپشن Hamed، 2026-10-06
 

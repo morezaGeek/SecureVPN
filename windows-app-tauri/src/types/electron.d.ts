@@ -38,8 +38,9 @@ export interface ElectronAPI {
     testServerPing: () => Promise<{ success: boolean; latency: number; error?: string }>
     tcpPing: (host: string, port: number) => Promise<{ success: boolean; latency: number; error?: string }>
     httpPing: (host: string, port: number, tls?: boolean, sni?: string) => Promise<{ success: boolean; latency: number; error?: string }>
-    testProfileRealDelay: (profile: any, testUrl?: string) => Promise<{ success: boolean; latency: number; error?: string }>
-    batchRealDelay: (profiles: any[], testUrl?: string) => Promise<Record<string, number>>
+    testProfileRealDelay: (profile: any, testUrl?: string, requestId?: string) => Promise<{ success: boolean; latency: number; error?: string }>
+    cancelPingTests: () => Promise<void>
+    batchRealDelay: (profiles: any[], testUrl?: string, requestId?: string) => Promise<Record<string, number>>
     showSaveDialog: (options: {
         title?: string
         defaultPath?: string
@@ -56,7 +57,7 @@ export interface ElectronAPI {
     fetchOriginalIp: () => Promise<string>
     onVpnStateChanged: (callback: (state: VpnState) => void) => void
     onVpnLog?: (callback: (log: VpnLog) => void) => void
-    onPingResult?: (callback: (result: { profileId: string; latency: number; mode: string }) => void) => void
+    onPingResult?: (callback: (result: { profileId: string; latency: number; mode: string; requestId?: string }) => void) => void
     onTrayConnect: (callback: () => void) => void
     onTrayDisconnect: (callback: () => void) => void
     onTraySelectProfile?: (callback: (profileId: string) => void) => void

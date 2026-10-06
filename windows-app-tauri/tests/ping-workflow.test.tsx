@@ -1,0 +1,58 @@
+import React from 'react'
+import assert from 'node:assert/strict'
+import { create, act } from 'react-test-renderer'
+import App from '../src/App'
+import { VpnProvider, useVpn } from '../src/context/VpnContext'
+import HomeScreen from '../src/screens/HomeScreen'
+const storage = new Map<string,string>()
+Object.assign(globalThis, {
+ localStorage: {getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>storage.set(k,v),removeItem:(k:string)=>storage.delete(k)},
+ document:{documentElement:{setAttribute(){}},activeElement:null,addEventListener(){},removeEventListener(){}},
+ window:{addEventListener(){},removeEventListener(){},dispatchEvent(){},setInterval,clearInterval},
+})
+const profile = (id:string,sub:string) => ({id,name:id,subscriptionId:sub,protocol:'vless',serverAddress:'example.com',port:443,singboxConfig:{transport:'ws',security:'tls'}})
+const fixtures = [profile('gozar-1','gozar'),profile('gozar-2','gozar'),profile('sale-1','sale')]
+storage.set('vpn-storage-version','1.0.6'); storage.set('vpn-profiles',JSON.stringify(fixtures));
+storage.set('vpn-subscriptions',JSON.stringify([{id:'gozar',name:'GozarVPN',url:'https://example.com/a'},{id:'sale',name:'Sale',url:'https://example.com/b'}]))
+storage.set('vpn-last-screen','profiles');storage.set('vpn-selected-subscription','gozar')
+let context:any, pingListener:any, vpnListener:any, calls:any[]=[]
+let pending:((result:any)=>void)[]=[]
+let latencyPending:((result:any)=>void)[]=[]
+const api={onVpnStateChanged:(fn:any)=>vpnListener=fn,onVpnLog(){},onTrayConnect(){},onTrayDisconnect(){},onPingResult:(fn:any)=>pingListener=fn,
+ batchRealDelay:(profiles:any[],url:any,requestId:string)=>{calls.push({ids:profiles.map(p=>p.id),requestId});return new Promise(resolve=>pending.push(resolve))},
+ cancelPingTests:async()=>{},testLatency:()=>new Promise(resolve=>latencyPending.push(resolve)),fetchOriginalIp:async()=>null,
+ tcpPing:async()=>({success:true,latency:41}),httpPing:async()=>({success:true,latency:42})}
+;(window as any).electronAPI=api
+const flush=async(fn?:()=>any)=>{await act(async()=>{await fn?.();await Promise.resolve()})}
+function text(node:any):string {return Array.isArray(node)?node.map(text).join(''):typeof node==='object'&&node?text(node.children):String(node??'')}
+function button(tree:any,label:string) {return tree.root.findAllByType('button').find((b:any)=>text(b.children)===label)!}
+function chip(tree:any,label:string) {return tree.root.findAllByType('div').find((b:any)=>b.props.className?.includes('profile-card') && text(b.children).trim()===label)!}
+async function run(){
+ let app:any;await flush(()=>{app=create(<App/>)});
+ assert.ok(chip(app,'GozarVPN').props.className.includes('selected'))
+ await act(()=>{button(app,'Test all').props.onClick()}); assert.deepEqual(calls[0].ids,['gozar-1','gozar-2'])
+ await flush(()=>button(app,'Stop').props.onClick());
+ await flush(()=>{pingListener({profileId:'gozar-1',latency:999,mode:'real',requestId:calls[0].requestId});pending.shift()!({'gozar-1':999})});
+ assert.ok(!text(app.toJSON()).includes('999ms'))
+ await flush(()=>button(app,'Connection').props.onClick());await flush(()=>button(app,'Profiles').props.onClick());
+ assert.ok(chip(app,'GozarVPN').props.className.includes('selected'))
+ await flush(()=>app.unmount());await flush(()=>{app=create(<App/>)});
+ assert.ok(button(app,'Profiles').props.className.includes('active'));assert.ok(chip(app,'GozarVPN').props.className.includes('selected'));
+ await flush(()=>app.unmount());
+ function Capture(){context=useVpn();return null}
+ let tree:any;await flush(()=>{tree=create(<VpnProvider><Capture/><HomeScreen/></VpnProvider>)});
+ let old:any;await flush(()=>{old=context.testAllPings('real',['gozar-1']);void context.testAllPings('real',['sale-1'])});
+ assert.equal(calls.length,2,'Immediate duplicate requests are rejected')
+ await flush(()=>context.cancelPings());let next:any;await flush(()=>{next=context.testAllPings('real',['sale-1'])});
+ await flush(()=>pending.shift()!({'gozar-1':998}));await old;
+ assert.equal(context.isTestingPings,true,'Old finalization must not reset newer run')
+ await flush(()=>{pingListener({profileId:'sale-1',latency:123,mode:'real',requestId:calls.at(-1).requestId});pending.shift()!({'sale-1':123})});await next;
+ assert.equal(context.profiles.find((p:any)=>p.id==='sale-1').ping,123);assert.equal(context.isTestingPings,false)
+ await flush(()=>vpnListener({status:'connected',profile:fixtures[0]}));assert.equal(latencyPending.length,1)
+ // Switching the session while an HTTP request is pending must ignore its result.
+ await flush(()=>vpnListener({status:'disconnected'}));await flush(()=>vpnListener({status:'connected',profile:fixtures[2]}));
+ await flush(()=>latencyPending.shift()!({success:true,latency:997}));assert.ok(!text(tree.toJSON()).includes('997ms'))
+ await flush(()=>latencyPending.shift()!({success:true,latency:88}));assert.ok(text(tree.toJSON()).includes('88ms'))
+ await flush(()=>tree.unmount());console.log('PASS: selected-sub scope, cancellation, late events, duplicate clicks, restart/navigation persistence, reconnect latency generation')
+}
+run().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})

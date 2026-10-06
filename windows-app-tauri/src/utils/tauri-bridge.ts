@@ -57,11 +57,12 @@ export function setupTauriBridge() {
         httpPing: async (host: string, port: number, tls?: boolean, sni?: string) => {
             return await invoke('http_ping', { host, port, tls, sni })
         },
-        testProfileRealDelay: async (profile: any, testUrl?: string) => {
-            return await invoke('singbox_test_profile_real_delay', { profile, testUrl })
+        testProfileRealDelay: async (profile: any, testUrl?: string, requestId?: string) => {
+            return await invoke('singbox_test_profile_real_delay', { profile, testUrl, requestId })
         },
-        batchRealDelay: async (profiles: any[], testUrl?: string) => {
-            return await invoke('singbox_batch_real_delay', { profiles, testUrl })
+        cancelPingTests: async () => { await invoke('cancel_ping_tests') },
+        batchRealDelay: async (profiles: any[], testUrl?: string, requestId?: string) => {
+            return await invoke('singbox_batch_real_delay', { profiles, testUrl, requestId })
         },
         showSaveDialog: async (options: any) => {
             try {

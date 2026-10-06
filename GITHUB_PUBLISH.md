@@ -1,6 +1,21 @@
-# GitHub publication handoff — 2026-10-04
+# GitHub publication handoff — 2026-10-06
 
 مخزن: `morezaGeek/SecureVPN`، شاخهٔ `main`.
+
+## Windows2.0.36 — آمادهٔ انتشار، 2026-10-06
+
+[SecureVPN-v2.0.36-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.36-Setup.exe>)، x64، **36,785,885 بایت**، حدود35.08MiB. SHA256: `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`.
+helper محلی `scratch/windows-diagnostics/publish-2.0.36.cjs`؛ سورس ابتدا push، فایل در draft آپلود/download/hash و سپس منتشر می‌شود. نسخهٔ نصب‌شده35 باقی می‌ماند تا نشان Update بعد از انتشار36 بررسی شود؛ نصب دستی36 انجام نشده است.
+
+کاربر دانلود/نصب35 را در۶اکتبر تأیید کرد؛ تصویر UI نسخه35 را نشان می‌دهد. نتیجهٔ آزمون35 تکمیل‌شده است؛ این به‌تنهایی آزمون ارتقای35به36 نیست.
+
+## انتشار قبلی Windows2.0.35 — 2026-10-06
+
+[ریلیز35](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.35)، commit/tag `b1fc54c49d0781f3c299379c5c0639056770cd93`. [فایل نصب](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.35/SecureVPN-v2.0.35-Setup.exe)،36,827,328بایت؛ SHA256 `EF38A372368614DF7530CFD19E91CC83AB46F07A2C46F29FF64725889757D25D`. سورس اول push شد؛ فایل draft دانلود مجدد/hash و سپس انتشار عمومی/digest/tag تأیید شدند.
+
+helper محلی `scratch/windows-diagnostics/publish-2.0.35.cjs` و گزارش `published-2.0.35.json`؛ فقط توکن مرکزی پروژه را می‌خواند. نسخه/hash helperهای قبلی برای انتشار جدید مناسب نیستند.
+
+نصب دستی35 قبل از آزمون نشان انجام نشد. نسخهٔ نصب‌شده34 با Administrator اجرا شده و ابزار UI نمی‌تواند کلیک کند؛ از کاربر خواسته شد Settings/About/Check for Updates و نصب از نشان را امتحان کند. نتیجهٔ واقعی این آزمون جدا در ChatGPT ChangeLOG.md ثبت می‌شود؛ انتشار/تست downloader، جای آزمون UI را نمی‌گیرد.
 
 توکن پروژه در **2026-10-03** به‌روز و دسترسی خواندن مخزن/پوش با GitHub API تأیید شد. مقدار توکن تنها در فایل محلی `scratch/github-token.private.txt` نگهداری می‌شود. این فایل و تمام پوشهٔ scratch توسط Git نادیده گرفته می‌شوند؛ مقدار توکن در مستندات، کامیت، URL ریموت یا asset ریلیز قرار نگیرد.
 

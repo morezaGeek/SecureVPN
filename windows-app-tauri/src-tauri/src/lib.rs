@@ -1,4 +1,5 @@
 mod system_proxy;
+mod latency;
 mod commands;
 pub mod iran_ips;
 mod openconnect;
@@ -43,6 +44,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(app_state)
         .manage(updater::UpdateState::default())
+        .manage(commands::PingTestState::default())
         .setup(|app| {
             // Ensure system proxy is cleared on startup
             commands::clear_app_system_proxy();
@@ -146,6 +148,7 @@ pub fn run() {
             http_ping,
             singbox_test_profile_real_delay,
             singbox_batch_real_delay,
+            cancel_ping_tests,
             subscription_fetch,
             tray_update_menu,
             open_external_url,

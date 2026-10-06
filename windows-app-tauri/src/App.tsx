@@ -13,7 +13,12 @@ import packageJson from '../package.json'
 type Screen = 'home' | 'profiles' | 'settings' | 'logs'
 
 function App() {
-    const [currentScreen, setCurrentScreen] = useState<Screen>('home')
+    const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
+        const saved = localStorage.getItem('vpn-last-screen')
+        return ['home', 'profiles', 'settings', 'logs'].includes(saved || '') ? saved as Screen : 'home'
+    })
+
+    useEffect(() => { localStorage.setItem('vpn-last-screen', currentScreen) }, [currentScreen])
 
     useEffect(() => {
         window.dispatchEvent(new Event('app-ready'))

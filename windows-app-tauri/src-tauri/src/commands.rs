@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
@@ -454,270 +454,213 @@ pub async fn http_ping(host: String, port: u16, tls: Option<bool>, sni: Option<S
     }
 }
 
+pub struct PingTestState {
+    gate: Mutex<()>,
+    generation: AtomicU64,
+    live_gate: Mutex<()>,
+    live_client: Mutex<Option<(u32, reqwest::Client)>>,
+}
+
+impl Default for PingTestState {
+    fn default() -> Self {
+        Self { gate: Mutex::new(()), generation: AtomicU64::new(0),
+            live_gate: Mutex::new(()), live_client: Mutex::new(None) }
+    }
+}
+
 #[tauri::command]
-pub async fn singbox_test_latency() -> Result<Value, String> {
-    let proxy = match reqwest::Proxy::all("http://127.0.0.1:2080") {
-        Ok(p) => p,
-        Err(_) => return Ok(json!({ "success": false, "latency": -1 })),
+pub async fn cancel_ping_tests(pings: State<'_, PingTestState>) -> Result<(), String> {
+    stop_ping_tests(&pings).await;
+    Ok(())
+}
+
+async fn stop_ping_tests(pings: &PingTestState) {
+    pings.generation.fetch_add(1, Ordering::SeqCst);
+    // Return only after the runner has stopped and removed its private config.
+    let _guard = pings.gate.lock().await;
+}
+
+#[tauri::command]
+pub async fn singbox_test_latency(state: State<'_, AppState>, pings: State<'_, PingTestState>) -> Result<Value, String> {
+    // Serialize across reconnects too; the old session releases this lock as
+    // soon as its PID/status changes, so a fresh automatic probe can proceed.
+    let _guard = pings.live_gate.lock().await;
+    let pid = (*state.active_pid.lock().await).ok_or("VPN is disconnected")?;
+    if state.vpn_state.lock().await.status != "connected" { return Err("VPN is disconnected".into()); }
+    let client = {
+        let mut cache = pings.live_client.lock().await;
+        if cache.as_ref().map(|(cached,_)| *cached) != Some(pid) {
+            *cache = Some((pid, crate::latency::proxy_client(2080)?));
+        }
+        cache.as_ref().unwrap().1.clone()
     };
-    let client = match reqwest::Client::builder()
-        .proxy(proxy)
-        .timeout(std::time::Duration::from_millis(5000))
-        .connect_timeout(std::time::Duration::from_millis(4500))
-        .build() {
-            Ok(c) => c,
-            Err(_) => return Ok(json!({ "success": false, "latency": -1 })),
-        };
-
-    let mut latencies: Vec<i64> = Vec::new();
-    for _ in 0..2 {
-        let start = std::time::Instant::now();
-        match client.get("https://www.google.com/generate_204").send().await {
-            Ok(resp) => {
-                let s = resp.status();
-                let _ = resp.bytes().await;
-                let elapsed = start.elapsed().as_millis() as i64;
-                if s.as_u16() == 204 || s.is_success() {
-                    latencies.push(elapsed);
-                }
+    let targets = crate::latency::targets(None);
+    let result = tokio::select! {
+        result = crate::latency::measure(&client, &targets) => result,
+        _ = async {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                if *state.active_pid.lock().await != Some(pid) || state.vpn_state.lock().await.status != "connected" { break; }
             }
-            Err(_) => {}
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
-    if latencies.len() == 1 && latencies[0] > 250 {
-        let start = std::time::Instant::now();
-        if let Ok(resp) = client.get("https://www.google.com/generate_204").send().await {
-            let s = resp.status();
-            let _ = resp.bytes().await;
-            let elapsed = start.elapsed().as_millis() as i64;
-            if s.as_u16() == 204 || s.is_success() {
-                latencies.push(elapsed);
-            }
-        }
-    }
-
-    let min_ms = latencies.into_iter().min().unwrap_or(-1);
-    if min_ms > 0 {
-        Ok(json!({ "success": true, "latency": min_ms }))
-    } else {
-        Ok(json!({ "success": false, "latency": -1 }))
+        } => return Err("VPN connection changed".into()),
+    };
+    if *state.active_pid.lock().await != Some(pid) { return Err("VPN connection changed".into()); }
+    match result {
+        Ok(ms) => Ok(json!({"success":true,"latency":ms})),
+        Err(e) => Ok(json!({"success":false,"latency":-1,"error":e})),
     }
 }
 
 #[tauri::command]
-pub async fn singbox_test_server_ping() -> Result<Value, String> {
-    Ok(json!({ "success": true, "latency": 25 }))
+pub async fn singbox_test_server_ping(state: State<'_, AppState>) -> Result<Value, String> {
+    let profile = state.vpn_state.lock().await.profile.clone().ok_or("No active profile")?;
+    let host = profile["serverAddress"].as_str().ok_or("Missing server")?.to_owned();
+    let port = profile["port"].as_u64().unwrap_or(443) as u16;
+    match run_tcp_ping(host,port).await {
+        Ok(ms) => Ok(json!({"success":true,"latency":ms})),
+        Err(e) => Ok(json!({"success":false,"latency":-1,"error":e})),
+    }
 }
 
-fn find_available_port_range(start_port: u16, count: u16) -> u16 {
-    'outer: for base in (start_port..start_port + 500).step_by(1) {
+fn find_available_port_range(start_port: u16, count: u16) -> Result<u16, String> {
+    if count == 0 || count > 500 { return Err("Too many test profiles".into()); }
+    'outer: for base in start_port..start_port + 500 {
         for offset in 0..count {
-            if std::net::TcpListener::bind(("127.0.0.1", base + offset)).is_err() {
-                continue 'outer;
-            }
+            if std::net::TcpListener::bind(("127.0.0.1", base + offset)).is_err() { continue 'outer; }
         }
-        return base;
+        return Ok(base);
     }
-    start_port
+    Err("No available test ports".into())
+}
+
+struct TestConfig(PathBuf);
+impl Drop for TestConfig {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+}
+
+#[cfg(test)]
+mod ping_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancellation_waits_for_runner_cleanup_before_allowing_restart() {
+        let pings = Arc::new(PingTestState::default());
+        let guard = pings.gate.lock().await;
+        let generation = pings.generation.load(Ordering::SeqCst);
+        let owned = pings.clone();
+        let mut cancellation = tokio::spawn(async move { stop_ping_tests(&owned).await; });
+        tokio::time::timeout(std::time::Duration::from_millis(200),cancelled(&pings,generation)).await.unwrap();
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20),&mut cancellation).await.is_err());
+        assert!(pings.gate.try_lock().is_err());
+        drop(guard);
+        cancellation.await.unwrap();
+        assert!(pings.gate.try_lock().is_ok());
+    }
+
+    #[test]
+    fn invalid_port_range_never_silently_reuses_a_busy_range() {
+        assert!(find_available_port_range(11000,0).is_err());
+        assert!(find_available_port_range(11000,501).is_err());
+    }
+}
+
+async fn cancelled(pings: &PingTestState, generation: u64) {
+    while pings.generation.load(Ordering::SeqCst) == generation {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 #[tauri::command]
 pub async fn singbox_batch_real_delay(
-    app: AppHandle,
-    profiles: Vec<Value>,
-    test_url: Option<String>,
+    app: AppHandle, pings: State<'_, PingTestState>, profiles: Vec<Value>,
+    test_url: Option<String>, request_id: Option<String>,
 ) -> Result<HashMap<String, i64>, String> {
-    let mut results: HashMap<String, i64> = HashMap::new();
-    let mut sb_profiles = Vec::new();
+    batch_real_delay(&app, &pings, profiles, test_url, request_id).await
+}
 
-    // Handle OpenConnect profiles via direct TCP ping
-    for p in &profiles {
-        let protocol = p.get("protocol").and_then(|v| v.as_str()).unwrap_or("");
-        let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if protocol == "openconnect" {
-            let host = p.get("serverAddress").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let port = p.get("port").and_then(|v| v.as_u64()).unwrap_or(443) as u16;
-            let latency = match run_tcp_ping(host, port).await {
-                Ok(ms) => ms,
-                Err(_) => -1,
-            };
-            results.insert(id.clone(), latency);
-            let _ = app.emit("vpn:pingResult", json!({
-                "profileId": id,
-                "latency": latency,
-                "mode": "real"
-            }));
-        } else if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
-            sb_profiles.push(p.clone());
+async fn batch_real_delay(app: &AppHandle, pings: &PingTestState, profiles: Vec<Value>, test_url: Option<String>, request_id: Option<String>) -> Result<HashMap<String, i64>, String> {
+    let _guard = pings.gate.try_lock().map_err(|_| "Another ping test is running")?;
+    let generation = pings.generation.load(Ordering::SeqCst);
+    let mut results = HashMap::new();
+    let sb_profiles: Vec<_> = profiles.iter().filter(|p| ["vless","vmess","trojan","shadowsocks","hysteria2"].contains(&p["protocol"].as_str().unwrap_or(""))).cloned().collect();
+    let mut child = None;
+    let mut private_config = None;
+    let mut port_map = Vec::new();
+    if !sb_profiles.is_empty() {
+        let bin_path = resolve_binary(app, "singbox/sing-box.exe")?;
+        let config = TestConfig(std::env::temp_dir().join(format!("sb-batch-{}.json",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())));
+        let base = find_available_port_range(11000, sb_profiles.len() as u16)?;
+        port_map = build_singbox_batch_test_config(&sb_profiles, &config.0, base).await?;
+        let first_port = port_map.first().map(|(_,port)| *port).ok_or("No valid test profiles")?;
+        let mut cmd = tokio::process::Command::new(bin_path);
+        cmd.args(["run","-c"]).arg(&config.0).kill_on_drop(true)
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        let mut runner = cmd.spawn().map_err(|e| format!("Failed to start test runner: {e}"))?;
+        let ready = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if pings.generation.load(Ordering::SeqCst) != generation { return Err("Ping test cancelled".to_owned()); }
+                if runner.try_wait().map_err(|e| e.to_string())?.is_some() { return Err("Test runner exited before listening".to_owned()); }
+                if tokio::net::TcpStream::connect(("127.0.0.1",first_port)).await.is_ok() { return Ok(()); }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }).await;
+        if !matches!(ready, Ok(Ok(()))) {
+            let _ = runner.kill().await;
+            return Err("Test runner unavailable or cancelled".into());
         }
+        child = Some(runner);
+        private_config = Some(config);
     }
-
-    if sb_profiles.is_empty() {
-        return Ok(results);
-    }
-
-    let bin_path = resolve_binary(&app, "singbox/sing-box.exe")?;
-    let temp_dir = std::env::temp_dir();
-    let unique_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-    let config_path = temp_dir.join(format!("sb-batch-{}.json", unique_id));
-
-    let base_port = find_available_port_range(11000, sb_profiles.len() as u16 + 5);
-    let port_map = build_singbox_batch_test_config(&sb_profiles, &config_path, base_port).await?;
-
-    #[cfg(windows)]
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    let mut cmd = tokio::process::Command::new(&bin_path);
-    cmd.args(["run", "-c", config_path.to_str().unwrap_or("")])
-       .stdout(std::process::Stdio::null())
-       .stderr(std::process::Stdio::null());
-
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn sing-box test runner: {}", e))?;
-
-    // Wait for inbounds to become ready
-    let first_port = port_map.first().map(|(_, p)| *p).unwrap_or(base_port);
-    let mut ready = false;
-    for _ in 0..40 {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        if std::net::TcpStream::connect(("127.0.0.1", first_port)).is_ok() {
-            ready = true;
-            break;
-        }
-    }
-
-    if !ready {
-        let _ = child.kill().await;
-        let _ = std::fs::remove_file(&config_path);
-        return Err("sing-box test runner failed to start listeners".into());
-    }
-
-    let target_url = test_url
-        .map(|u| u.trim().to_string())
-        .filter(|u| !u.is_empty())
-        .unwrap_or_else(|| "https://www.google.com/generate_204".to_string());
-
-    // Force https to prevent ISP / DPI interception and 301 redirects on port 80
-    let target_url = if !target_url.starts_with("http://") && !target_url.starts_with("https://") {
-        format!("https://{}", target_url)
-    } else if target_url.starts_with("http://") {
-        target_url.replacen("http://", "https://", 1)
-    } else {
-        target_url
-    };
-
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(3));
-    let mut set = tokio::task::JoinSet::new();
-
-    for (profile_id, port) in port_map {
-        // Stagger each probe by 80ms to avoid network burst congestion and false high pings
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
-        let sem_clone = sem.clone();
-        let app_clone = app.clone();
-        let url_str = target_url.clone();
-
-        set.spawn(async move {
-            let _permit = sem_clone.acquire_owned().await;
-
-            let proxy_url = format!("http://127.0.0.1:{}", port);
-            let proxy = match reqwest::Proxy::all(&proxy_url) {
-                Ok(p) => p,
-                Err(_) => {
-                    let _ = app_clone.emit("vpn:pingResult", json!({
-                        "profileId": profile_id,
-                        "latency": -1,
-                        "mode": "real"
-                    }));
-                    return (profile_id, -1);
-                }
-            };
-
-            let client = match reqwest::Client::builder()
-                .proxy(proxy)
-                .timeout(std::time::Duration::from_millis(5000))
-                .connect_timeout(std::time::Duration::from_millis(4500))
-                .build() {
-                    Ok(c) => c,
-                    Err(_) => {
-                        let _ = app_clone.emit("vpn:pingResult", json!({
-                            "profileId": profile_id,
-                            "latency": -1,
-                            "mode": "real"
-                        }));
-                        return (profile_id, -1);
-                    }
+    let urls = crate::latency::targets(test_url.as_deref());
+    let sem = Arc::new(tokio::sync::Semaphore::new(4));
+    let mut tasks = tokio::task::JoinSet::new();
+    for profile in profiles {
+        let id = profile["id"].as_str().unwrap_or("").to_owned();
+        let port = port_map.iter().find(|(key,_)| key == &id).map(|(_,port)| *port);
+        let urls = urls.clone();
+        let sem = sem.clone();
+        tasks.spawn(async move {
+            let _permit = sem.acquire_owned().await;
+            let (ms,mode) = if let Some(port) = port {
+                let ms = match crate::latency::proxy_client(port) {
+                    Ok(client) => crate::latency::measure(&client,&urls).await.unwrap_or(-1),
+                    Err(_) => -1,
                 };
-
-            let mut latencies: Vec<i64> = Vec::new();
-
-            for _ in 0..2 {
-                let start = std::time::Instant::now();
-                match client.get(&url_str).send().await {
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let _ = resp.bytes().await;
-                        let elapsed = start.elapsed().as_millis() as i64;
-                        if status.as_u16() == 204 || status.is_success() {
-                            latencies.push(elapsed);
-                        }
-                    }
-                    Err(_) => {}
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-
-            // Warm connection probe if only cold dial was recorded
-            if latencies.len() == 1 && latencies[0] > 250 {
-                let start = std::time::Instant::now();
-                if let Ok(resp) = client.get(&url_str).send().await {
-                    let status = resp.status();
-                    let _ = resp.bytes().await;
-                    let elapsed = start.elapsed().as_millis() as i64;
-                    if status.as_u16() == 204 || status.is_success() {
-                        latencies.push(elapsed);
-                    }
-                }
-            }
-
-            let min_ms = latencies.into_iter().min().unwrap_or(-1);
-
-            let _ = app_clone.emit("vpn:pingResult", json!({
-                "profileId": profile_id,
-                "latency": min_ms,
-                "mode": "real"
-            }));
-
-            (profile_id, min_ms)
+                (ms,"real")
+            } else if profile["protocol"].as_str() == Some("openconnect") {
+                (run_tcp_ping(profile["serverAddress"].as_str().unwrap_or("").to_owned(),profile["port"].as_u64().unwrap_or(443) as u16).await.unwrap_or(-1),"tcp")
+            } else { (-1,"real") };
+            (id,ms,mode)
         });
     }
-
-    while let Some(res) = set.join_next().await {
-        if let Ok((profile_id, latency)) = res {
-            results.insert(profile_id, latency);
+    loop {
+        tokio::select! {
+            _ = cancelled(pings,generation) => { tasks.abort_all(); break; }
+            result = tasks.join_next() => match result {
+                Some(Ok((id,ms,mode))) => {
+                    let _ = app.emit("vpn:pingResult",json!({"profileId":id,"latency":ms,"mode":mode,"requestId":request_id}));
+                    results.insert(id,ms);
+                }
+                Some(Err(_)) => {},
+                None => break,
+            }
         }
     }
-
-    let _ = child.kill().await;
-    let _ = std::fs::remove_file(&config_path);
-
+    // Reap probes before shutting down the owned runner, even on cancellation.
+    while tasks.join_next().await.is_some() {}
+    if let Some(mut runner) = child { let _ = runner.kill().await; }
+    drop(private_config);
     Ok(results)
 }
 
 #[tauri::command]
-pub async fn singbox_test_profile_real_delay(app: AppHandle, profile: Value, test_url: Option<String>) -> Result<Value, String> {
-    let id = profile.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let batch_res = singbox_batch_real_delay(app, vec![profile], test_url).await?;
-    let latency = batch_res.get(&id).copied().unwrap_or(-1);
-    if latency > 0 {
-        Ok(json!({ "success": true, "latency": latency }))
-    } else {
-        Ok(json!({ "success": false, "latency": -1, "error": "Timeout or connection failed" }))
-    }
+pub async fn singbox_test_profile_real_delay(app: AppHandle, pings: State<'_, PingTestState>, profile: Value, test_url: Option<String>, request_id: Option<String>) -> Result<Value, String> {
+    let id = profile["id"].as_str().unwrap_or("").to_owned();
+    let results = batch_real_delay(&app,&pings,vec![profile],test_url,request_id).await?;
+    let latency = results.get(&id).copied().unwrap_or(-1);
+    Ok(json!({"success":latency>0,"latency":latency}))
 }
 
 #[tauri::command]

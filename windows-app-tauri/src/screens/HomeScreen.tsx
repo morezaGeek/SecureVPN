@@ -32,7 +32,7 @@ export default function HomeScreen() {
 
     // Check if current profile is V2ray protocol
     const isV2rayProtocol = currentProfile?.protocol &&
-        ['vless', 'vmess', 'trojan', 'shadowsocks'].includes(currentProfile.protocol)
+        ['vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria2'].includes(currentProfile.protocol)
 
     // Update connection time - smooth local 1s timer when connected
     useEffect(() => {
@@ -52,26 +52,45 @@ export default function HomeScreen() {
         }
     }, [connectionState])
 
+    const latencySession = useRef(0)
+    const latencyBusy = useRef(false)
+    useEffect(() => {
+        latencySession.current++
+        latencyBusy.current = false
+        setLatency(null)
+        setIsTestingLatency(false)
+    }, [connectionState, currentProfile?.id])
+
     // Test latency function
     const testLatency = useCallback(async () => {
         const api = window.electronAPI
-        if (!api || connectionState !== 'connected' || !isV2rayProtocol) return
+        if (!api || connectionState !== 'connected' || !isV2rayProtocol || latencyBusy.current) return
+        const session = latencySession.current
+        latencyBusy.current = true
 
         setIsTestingLatency(true)
         try {
             const latencyResult = await api.testLatency()
 
+            if (latencySession.current !== session) return
             if (latencyResult.success && latencyResult.latency > 0) {
                 setLatency(latencyResult.latency)
             } else {
                 setLatency(-1)
             }
         } catch {
-            setLatency(-1)
+            if (latencySession.current === session) setLatency(-1)
         } finally {
-            setIsTestingLatency(false)
+            if (latencySession.current === session) {
+                latencyBusy.current = false
+                setIsTestingLatency(false)
+            }
         }
-    }, [connectionState, isV2rayProtocol])
+    }, [connectionState, isV2rayProtocol, currentProfile?.id])
+
+    useEffect(() => {
+        if (connectionState === 'connected' && isV2rayProtocol) void testLatency()
+    }, [connectionState, currentProfile?.id, isV2rayProtocol, testLatency])
 
     // Handle latency test mode changes
     useEffect(() => {

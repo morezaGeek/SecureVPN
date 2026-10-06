@@ -25,8 +25,10 @@ interface VpnContextType {
     // Connection actions
     connect: (overrideProfile?: VpnProfile) => Promise<void>
     disconnect: () => Promise<void>
-    testAllPings: (mode?: 'tcp' | 'http' | 'real') => Promise<void>
+    testAllPings: (mode?: 'tcp' | 'http' | 'real', profileIds?: string[]) => Promise<void>
     testSingleProfile: (profileId: string, mode?: 'tcp' | 'http' | 'real') => Promise<void>
+    cancelPings: () => Promise<void>
+    pingProgress: { done: number; total: number }
     clearPings: () => void
     isTestingPings: boolean
     testingProfileIds: string[]
@@ -73,6 +75,17 @@ export function VpnProvider({ children }: VpnProviderProps) {
     const [refreshingSubIds, setRefreshingSubIds] = useState<string[]>([])
     const [isTestingPings, setIsTestingPings] = useState(false)
     const [testingProfileIds, setTestingProfileIds] = useState<string[]>([])
+    const [pingProgress, setPingProgress] = useState({ done: 0, total: 0 })
+    const pingRun = useRef<{ id: string; pending: Set<string>; total: number } | null>(null)
+    const pingBusy = useRef(false)
+    const cancellingPings = useRef<Promise<void> | null>(null)
+    const acceptPing = useCallback((id: string, latency: number, mode: 'tcp' | 'http' | 'real', requestId: string) => {
+        const run = pingRun.current
+        if (!run || run.id !== requestId || !run.pending.delete(id)) return
+        setProfiles(prev => prev.map(p => p.id === id ? { ...p, ping: latency, pingMode: mode } : p))
+        setTestingProfileIds([...run.pending])
+        setPingProgress({ done: run.total - run.pending.size, total: run.total })
+    }, [])
     const subscriptionsRef = useRef<VpnSubscription[]>([])
     subscriptionsRef.current = subscriptions
 
@@ -171,8 +184,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
             })
 
             window.electronAPI.onPingResult?.((res) => {
-                setProfiles(prev => prev.map(p => p.id === res.profileId ? { ...p, ping: res.latency, pingMode: res.mode as any } : p))
-                setTestingProfileIds(prev => prev.filter(id => id !== res.profileId))
+                if (res.requestId) acceptPing(res.profileId, res.latency, res.mode as any, res.requestId)
             })
         }
     }, [])
@@ -350,128 +362,77 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setProfiles(prev => prev.filter(p => p.subscriptionId !== id))
     }, [])
 
-    const testAllPings = useCallback(async (mode: 'tcp' | 'http' | 'real' = 'real') => {
-        const api = window.electronAPI
-        if (!api || isTestingPings) return
-        
-        setIsTestingPings(true)
-        // Reset all pings first so user sees new results coming in
-        setProfiles(prev => prev.map(p => ({ ...p, ping: undefined, pingMode: undefined })))
-        
-        const targetProfiles = [...profiles]
-
-        if (mode === 'real') {
-            setTestingProfileIds(targetProfiles.map(p => p.id))
-            try {
-                const results = await api.batchRealDelay(targetProfiles)
-                if (results && typeof results === 'object') {
-                    setProfiles(prev => prev.map(p => {
-                        const latency = results[p.id]
-                        if (latency !== undefined) {
-                            return { ...p, ping: latency, pingMode: 'real' }
-                        }
-                        return p
-                    }))
-                }
-            } catch (e) {
-                console.error('Batch real delay error:', e)
-            } finally {
+    const cancelPings = useCallback(async () => {
+        if (cancellingPings.current) return cancellingPings.current
+        pingBusy.current = true
+        pingRun.current = null // Ignore already queued results immediately.
+        const cancellation = (async () => {
+            try { await window.electronAPI?.cancelPingTests() }
+            catch (e) { console.error('Cancel ping tests:', e) }
+            finally {
+                pingBusy.current = false
                 setTestingProfileIds([])
                 setIsTestingPings(false)
             }
-            return
-        }
+        })()
+        cancellingPings.current = cancellation
+        try { await cancellation } finally { cancellingPings.current = null }
+    }, [])
 
-        const batchSize = 4
-
-        for (let i = 0; i < targetProfiles.length; i += batchSize) {
-            const batch = targetProfiles.slice(i, i + batchSize)
-            setTestingProfileIds(batch.map(p => p.id))
-
-            await Promise.all(batch.map(async profile => {
-                let finalLatency = -1
-                try {
-                    if (mode === 'tcp') {
-                        // Direct TCP handshake ping to serverAddress:port
-                        if (profile.serverAddress && profile.port) {
-                            const res = await api.tcpPing(profile.serverAddress, profile.port)
-                            if (res.success && res.latency > 0) {
-                                finalLatency = res.latency
-                            }
-                        }
-                    } else if (mode === 'http') {
-                        // Direct HTTP/HTTPS ping to serverAddress:port
-                        if (profile.serverAddress && profile.port) {
-                            const isTls = profile.singboxConfig?.security === 'tls' || 
-                                          profile.singboxConfig?.security === 'reality' || 
-                                          profile.port === 443
-                            const sni = profile.singboxConfig?.sni || profile.serverAddress
-                            const res = await api.httpPing(profile.serverAddress, profile.port, isTls, sni)
-                            if (res.success && res.latency > 0) {
-                                finalLatency = res.latency
-                            }
-                        }
-                    }
-                } catch (e) {
-                    finalLatency = -1
-                }
-                
-                setProfiles(prev => prev.map(p => p.id === profile.id ? { ...p, ping: finalLatency, pingMode: mode } : p))
-            }))
-
-            // Add a small pause between batches to prevent congesting the line
-            await new Promise(r => setTimeout(r, 60))
-        }
-
-        setTestingProfileIds([])
-        setIsTestingPings(false)
-    }, [profiles, isTestingPings])
-
-    const testSingleProfile = useCallback(async (profileId: string, mode: 'tcp' | 'http' | 'real' = 'real') => {
-        if (!window.electronAPI) return
-        const profile = profiles.find(p => p.id === profileId)
-        if (!profile) return
-
-        setTestingProfileIds(prev => prev.includes(profileId) ? prev : [...prev, profileId])
-
-        let finalLatency = -1
+    const testAllPings = useCallback(async (mode: 'tcp' | 'http' | 'real' = 'real', profileIds?: string[]) => {
+        const api = window.electronAPI
+        if (!api || pingBusy.current) return
+        const chosen = profileIds ? new Set(profileIds) : null
+        const targets = profilesRef.current.filter(p => !chosen || chosen.has(p.id))
+        if (!targets.length) return
+        const requestId = crypto.randomUUID()
+        const ids = new Set(targets.map(p => p.id))
+        pingBusy.current = true
+        pingRun.current = { id: requestId, pending: new Set(ids), total: ids.size }
+        setIsTestingPings(true)
+        setTestingProfileIds([...ids])
+        setPingProgress({ done: 0, total: ids.size })
+        setProfiles(prev => prev.map(p => ids.has(p.id) ? { ...p, ping: undefined, pingMode: undefined } : p))
         try {
-            if (mode === 'tcp') {
-                if (profile.serverAddress && profile.port) {
-                    const res = await window.electronAPI.tcpPing(profile.serverAddress, profile.port)
-                    if (res.success && res.latency > 0) {
-                        finalLatency = res.latency
-                    }
-                }
-            } else if (mode === 'http') {
-                if (profile.serverAddress && profile.port) {
-                    const isTls = profile.singboxConfig?.security === 'tls' || 
-                                  profile.singboxConfig?.security === 'reality' || 
-                                  profile.port === 443
-                    const sni = profile.singboxConfig?.sni || profile.serverAddress
-                    const res = await window.electronAPI.httpPing(profile.serverAddress, profile.port, isTls, sni)
-                    if (res.success && res.latency > 0) {
-                        finalLatency = res.latency
-                    }
-                }
+            if (mode === 'real') {
+                const results = await api.batchRealDelay(targets, undefined, requestId)
+                for (const p of targets) acceptPing(p.id, results[p.id] ?? -1, p.protocol === 'openconnect' ? 'tcp' : 'real', requestId)
             } else {
-                // Real delay
-                const res = await window.electronAPI.testProfileRealDelay(profile)
-                if (res.success && res.latency > 0) {
-                    finalLatency = res.latency
+                for (let i = 0; i < targets.length && pingRun.current?.id === requestId; i += 4) {
+                    await Promise.all(targets.slice(i, i + 4).map(async p => {
+                        let ms = -1
+                        try {
+                            const result = mode === 'tcp'
+                                ? await api.tcpPing(p.serverAddress, p.port)
+                                : await api.httpPing(p.serverAddress, p.port, p.singboxConfig?.security === 'tls' || p.singboxConfig?.security === 'reality' || p.port === 443, p.singboxConfig?.sni || p.serverAddress)
+                            if (result.success) ms = result.latency
+                        } catch { /* Failed profiles retain an explicit timeout. */ }
+                        acceptPing(p.id, ms, mode, requestId)
+                    }))
                 }
             }
         } catch (e) {
-            finalLatency = -1
+            console.error('Ping test failed:', e)
+            for (const p of targets) acceptPing(p.id, -1, mode, requestId)
+        } finally {
+            // Cancellation/new runs own their state; old completions must not reset it.
+            if (pingRun.current?.id === requestId) {
+                pingRun.current = null
+                pingBusy.current = false
+                setTestingProfileIds([])
+                setIsTestingPings(false)
+            }
         }
+    }, [acceptPing])
 
-        setProfiles(prev => prev.map(p => p.id === profileId ? { ...p, ping: finalLatency, pingMode: mode } : p))
-        setTestingProfileIds(prev => prev.filter(id => id !== profileId))
-    }, [profiles])
+    const testSingleProfile = useCallback(async (profileId: string, mode: 'tcp' | 'http' | 'real' = 'real') => {
+        await testAllPings(mode, [profileId])
+    }, [testAllPings])
 
     const clearPings = useCallback(() => {
+        void cancelPings()
         setProfiles(prev => prev.map(p => ({ ...p, ping: undefined, pingMode: undefined })))
-    }, [])
+    }, [cancelPings])
 
     const connect = useCallback(async (overrideProfile?: VpnProfile) => {
         const target = overrideProfile || currentProfileRef.current
@@ -673,6 +634,8 @@ export function VpnProvider({ children }: VpnProviderProps) {
         testAllPings,
         testSingleProfile,
         clearPings,
+        cancelPings,
+        pingProgress,
         isTestingPings,
         testingProfileIds,
         logs,
@@ -700,6 +663,8 @@ export function VpnProvider({ children }: VpnProviderProps) {
         testAllPings,
         testSingleProfile,
         clearPings,
+        cancelPings,
+        pingProgress,
         isTestingPings,
         testingProfileIds,
         logs,

@@ -120,7 +120,8 @@ async fn download_installer(
         let mut response = client.get(&asset.browser_download_url).send().await
             .map_err(|e| format!("Download failed: {e}"))?
             .error_for_status().map_err(|e| e.to_string())?;
-        let mut file = tokio::fs::File::create(part).await.map_err(|e| e.to_string())?;
+        let file = tokio::fs::File::create(part).await.map_err(|e| e.to_string())?;
+        let mut file = tokio::io::BufWriter::with_capacity(1024 * 1024, file);
         let mut hash = Sha256::new();
         let mut downloaded = 0u64;
         let mut last_percent = 101;
@@ -135,7 +136,8 @@ async fn download_installer(
                 last_percent = percent;
             }
         }
-        file.sync_all().await.map_err(|e| e.to_string())?;
+        file.flush().await.map_err(|e| e.to_string())?;
+        file.get_ref().sync_all().await.map_err(|e| e.to_string())?;
         drop(file);
         verify_download(downloaded, asset.size, &format!("{:x}", hash.finalize()), &expected)?;
         // A previous verified installer may exist after a cancelled installation.
@@ -255,6 +257,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn buffered_download_flushes_tail_and_preserves_progress_and_hash() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let bytes = vec![0x5au8; 36 * 1024 * 1024 + 123];
+        let size = bytes.len() as u64;
+        let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            socket.read(&mut request).await.unwrap();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            for chunk in bytes.chunks(4096) { socket.write_all(chunk).await.unwrap(); }
+        });
+        let dir = std::env::temp_dir().join(format!("securevpn-buffer-test-{}",std::process::id()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let mut asset = release("3.0.0").assets.remove(0);
+        asset.browser_download_url = format!("http://{address}/setup.exe");asset.size = size;asset.digest = Some(digest);
+        let progress = std::sync::Mutex::new(Vec::new());
+        let started = std::time::Instant::now();
+        let installer = dir.join("setup.exe");
+        download_installer(&Client::builder().no_proxy().build().unwrap(), &asset, &dir.join("setup.part"), &installer, |p| progress.lock().unwrap().push(p.downloaded)).await.unwrap();
+        assert_eq!(tokio::fs::metadata(&installer).await.unwrap().len(),size);
+        let ticks = progress.lock().unwrap();
+        assert_eq!(ticks.last(),Some(&size));
+        assert!(ticks.windows(2).all(|w| w[0] < w[1]));
+        println!("Buffered 36 MiB installer including partial final buffer: {:.2}s",started.elapsed().as_secs_f64());
+        tokio::fs::remove_file(installer).await.unwrap();tokio::fs::remove_dir(dir).await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     #[ignore = "Read-only GitHub integration: downloads a public Windows installer, verifies it, never executes or installs it"]
     async fn live_github_windows_download() {
         let client = client().unwrap();
@@ -264,7 +298,17 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let part = dir.join("setup.part");
         let installer = dir.join("verified-setup.exe");
-        download_installer(&client, &asset, &part, &installer, |_| {}).await.unwrap();
+        let started = std::time::Instant::now();
+        let samples = std::sync::Mutex::new(vec![(0u64,0f64)]);
+        download_installer(&client, &asset, &part, &installer, |p| {
+            let mut samples = samples.lock().unwrap();
+            if p.downloaded >= samples.last().unwrap().0 + asset.size / 10 || p.downloaded == asset.size {
+                let (previous,at) = *samples.last().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                println!("Download {}%: {:.2} Mbps interval; {:.1}s elapsed",p.downloaded*100/p.total,(p.downloaded-previous) as f64*8.0/(elapsed-at)/1_000_000.0,elapsed);
+                samples.push((p.downloaded,elapsed));
+            }
+        }).await.unwrap();
         assert_eq!(tokio::fs::metadata(&installer).await.unwrap().len(), asset.size);
         println!("Verified public Windows v{}: {} bytes; {}", info.version, asset.size, asset.digest.unwrap());
         assert!(app_check_update().await.unwrap().is_none(), "Current local version should not downgrade to the published release");

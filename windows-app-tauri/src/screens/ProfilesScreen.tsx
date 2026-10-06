@@ -47,6 +47,8 @@ export default function ProfilesScreen() {
         testAllPings, 
         testSingleProfile,
         clearPings,
+        cancelPings,
+        pingProgress,
         isTestingPings, 
         testingProfileIds 
     } = useVpn()
@@ -66,7 +68,17 @@ export default function ProfilesScreen() {
     const [isSubModalOpen, setIsSubModalOpen] = useState(false)
     const [subFormData, setSubFormData] = useState({ id: '', name: '', url: '' })
     const [isAddingSub, setIsAddingSub] = useState(false)
-    const [selectedSubId, setSelectedSubId] = useState<string | null>(null)
+    const [selectedSubId, setSelectedSubId] = useState<string | null>(() => {
+        const saved = localStorage.getItem('vpn-selected-subscription')
+        try {
+            const cached = JSON.parse(localStorage.getItem('vpn-subscriptions') || '[]')
+            return cached.some((sub: { id: string }) => sub.id === saved) ? saved : null
+        } catch { return null }
+    })
+    useEffect(() => {
+        if (selectedSubId) localStorage.setItem('vpn-selected-subscription', selectedSubId)
+        else localStorage.removeItem('vpn-selected-subscription')
+    }, [selectedSubId])
     const [editingSub, setEditingSub] = useState<boolean>(false)
 
     const openAddModal = () => {
@@ -427,7 +439,7 @@ export default function ProfilesScreen() {
                         <button 
                             className="btn btn-primary" 
                             style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 14px', fontSize: '0.85rem' }}
-                            onClick={() => testAllPings(pingMode)} 
+                            onClick={() => testAllPings(pingMode, displayedProfiles.map(p => p.id))}
                             disabled={isTestingPings || displayedProfiles.length === 0}
                             title={`Test all servers using ${pingMode.toUpperCase()}`}
                         >
@@ -436,9 +448,10 @@ export default function ProfilesScreen() {
                             ) : (
                                 <Play size={14} fill="currentColor" />
                             )}
-                            {isTestingPings ? 'Testing...' : 'Test all'}
+                            {isTestingPings ? `${pingProgress.done}/${pingProgress.total}` : 'Test all'}
                         </button>
 
+                        {isTestingPings && <button className="btn btn-secondary" onClick={() => void cancelPings()}>Stop</button>}
                         {/* Clear / Reset button */}
                         <button 
                             className="title-bar-button" 
@@ -516,7 +529,7 @@ export default function ProfilesScreen() {
                                                 fontWeight: 500,
                                                 cursor: 'pointer'
                                             }}
-                                            title={`Click to retest ${pingMode.toUpperCase()} (Ctrl+R)`}
+                                            title={`${profile.pingMode === 'tcp' ? 'TCP handshake to server' : 'HTTP response through tunnel'} — click to retest (Ctrl+R)`}
                                         >
                                             {profile.ping > 0 ? `${profile.ping}ms` : 'Timeout'}
                                         </span>

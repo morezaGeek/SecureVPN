@@ -102,6 +102,10 @@ pub async fn build_singbox_outbound(profile: &Value) -> Result<(String, String, 
 }
 
 pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Result<(String, String, Value), String> {
+    build_outbound(profile, tag, true).await
+}
+
+async fn build_outbound(profile: &Value, tag: &str, resolve_server: bool) -> Result<(String, String, Value), String> {
     let protocol = profile.get("protocol").and_then(|v| v.as_str()).unwrap_or("vless");
     let raw_server_address = profile.get("serverAddress")
         .and_then(|v| v.as_str())
@@ -112,7 +116,7 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
     let singbox_cfg = profile.get("singboxConfig").cloned().unwrap_or(json!({}));
 
     // Pre-resolve hostname to IPv4 to prevent sing-box circular DNS query loopback
-    let server_ip = resolve_hostname_to_ip(raw_server_address).await;
+    let server_ip = if resolve_server { resolve_hostname_to_ip(raw_server_address).await } else { raw_server_address.to_owned() };
 
     let uuid = singbox_cfg.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
     let transport = singbox_cfg.get("transport").and_then(|v| v.as_str()).unwrap_or("tcp");
@@ -394,7 +398,7 @@ pub async fn build_singbox_batch_test_config(
         let in_tag = format!("in-{}", i);
         let port = base_port + port_map.len() as u16;
 
-        match build_singbox_outbound_with_tag(p, &tag).await {
+        match build_outbound(p, &tag, false).await {
             Ok((_raw_addr, _server_ip, outbound)) => {
                 inbounds.push(json!({
                     "type": "mixed",
@@ -431,7 +435,8 @@ pub async fn build_singbox_batch_test_config(
         "dns": {
             "servers": [
                 {
-                    "type": "local",
+                    "type": "udp",
+                    "server": "1.1.1.1",
                     "tag": "direct-dns"
                 }
             ],
@@ -440,6 +445,7 @@ pub async fn build_singbox_batch_test_config(
         "inbounds": inbounds,
         "outbounds": outbounds,
         "route": {
+            "auto_detect_interface": true,
             "default_domain_resolver": "direct-dns",
             "rules": route_rules,
             "final": "direct"
@@ -855,10 +861,9 @@ pub async fn spawn_singbox(
 }
 
 pub async fn run_tcp_ping(host: String, port: u16) -> Result<i64, String> {
-    let addr = format!("{}:{}", host, port);
     let start = Instant::now();
-    match tokio::time::timeout(Duration::from_millis(3000), tokio::net::TcpStream::connect(&addr)).await {
-        Ok(Ok(_)) => Ok(start.elapsed().as_millis() as i64),
+    match tokio::time::timeout(Duration::from_millis(3000), tokio::net::TcpStream::connect((host.as_str(), port))).await {
+        Ok(Ok(_)) => Ok(start.elapsed().as_millis().max(1) as i64),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err("Timeout".into()),
     }

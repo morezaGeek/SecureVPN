@@ -40,7 +40,7 @@ interface VpnContextType {
 
     // Settings
     settings: AppSettings
-    updateSettings: (settings: Partial<AppSettings>) => void
+    updateSettings: (settings: Partial<AppSettings>) => Promise<boolean>
 }
 
 const VpnContext = createContext<VpnContextType | null>(null)
@@ -100,6 +100,11 @@ export function VpnProvider({ children }: VpnProviderProps) {
 
     const [logs, setLogs] = useState<ConnectionLog[]>([])
     const [settings, setSettings] = useState<AppSettings>(createDefaultSettings())
+
+    const settingsRef = useRef(settings)
+    settingsRef.current = settings
+    const pendingRouting = useRef<AppSettings | null>(null)
+    const applyingRouting = useRef<Promise<boolean> | null>(null)
 
     // Load saved data on mount
     useEffect(() => {
@@ -551,68 +556,46 @@ export function VpnProvider({ children }: VpnProviderProps) {
         }
     }, [currentProfile])
 
-    const updateSettings = useCallback(async (newSettings: Partial<AppSettings>) => {
-        let mergedSettings: AppSettings = settings
-        setSettings(prev => {
-            mergedSettings = { ...prev, ...newSettings }
-            return mergedSettings
-        })
-
-        const routingKeys: (keyof AppSettings)[] = [
-            'bypassIranRoutes',
-            'bypassPrivateIps',
-            'bypassDomains',
-            'bypassIps',
-            'tunStack',
-            'mtuSize'
-        ]
-        const hasRoutingChange = routingKeys.some(k => k in newSettings)
-
-        if (hasRoutingChange && connectionState === 'connected' && currentProfile && window.electronAPI) {
-            const isBypassActive = (newSettings.bypassIranRoutes !== undefined ? newSettings.bypassIranRoutes : settings.bypassIranRoutes) === true
-            const domains = newSettings.bypassDomains !== undefined ? newSettings.bypassDomains : (settings.bypassDomains || [])
-            const ips = newSettings.bypassIps !== undefined ? newSettings.bypassIps : (settings.bypassIps || [])
-            const tunStack = newSettings.tunStack || settings.tunStack
-            const mtu = newSettings.mtuSize || settings.mtuSize
-
-            const enrichedProfile = {
-                ...currentProfile,
-                bypassIranRoutes: isBypassActive,
-                bypassPrivateIps: isBypassActive,
-                bypassDomains: domains,
-                bypassIps: ips,
-                singboxConfig: currentProfile.singboxConfig ? {
-                    ...currentProfile.singboxConfig,
-                    mtu: mtu,
-                    tunStack: tunStack,
-                    bypassIranRoutes: isBypassActive,
-                    bypassPrivateIps: isBypassActive,
-                    bypassDomains: domains,
-                    bypassIps: ips
-                } : undefined
-            }
-
-            try {
-                addLog({
-                    profileId: currentProfile.id,
-                    profileName: currentProfile.name,
-                    level: 'info',
-                    message: 'Applying updated bypass rules live...'
-                })
-                const res = await window.electronAPI.connect(enrichedProfile)
-                if (res.success) {
-                    addLog({
-                        profileId: currentProfile.id,
-                        profileName: currentProfile.name,
-                        level: 'success',
-                        message: 'Bypass settings applied live to active connection'
-                    })
+    const updateSettings = useCallback(async (newSettings: Partial<AppSettings>): Promise<boolean> => {
+        const previous = settingsRef.current
+        const changed = (Object.keys(newSettings) as (keyof AppSettings)[])
+            .filter(key => JSON.stringify(previous[key]) !== JSON.stringify(newSettings[key]))
+        // A blur followed by Save, or window focus changes, must not restart VPN.
+        if (!changed.length) return applyingRouting.current || true
+        const merged = { ...previous, ...newSettings }
+        settingsRef.current = merged
+        setSettings(merged)
+        const routingKeys: (keyof AppSettings)[] = ['bypassIranRoutes', 'bypassPrivateIps', 'bypassDomains', 'bypassIps', 'tunStack', 'mtuSize']
+        if (!changed.some(key => routingKeys.includes(key)) || connectionStateRef.current !== 'connected' || !window.electronAPI) return true
+        pendingRouting.current = merged
+        if (applyingRouting.current) return applyingRouting.current
+        const apply = (async () => {
+            let succeeded = true
+            while (pendingRouting.current) {
+                const snapshot = pendingRouting.current
+                pendingRouting.current = null
+                const profile = currentProfileRef.current
+                if (connectionStateRef.current !== 'connected' || !profile) break
+                const bypass = snapshot.bypassIranRoutes === true
+                const routing = { bypassIranRoutes: bypass, bypassPrivateIps: bypass, bypassDomains: snapshot.bypassDomains || [], bypassIps: snapshot.bypassIps || [] }
+                const enriched = { ...profile, ...routing,
+                    singboxConfig: profile.singboxConfig ? { ...profile.singboxConfig, ...routing, mtu: snapshot.mtuSize, tunStack: snapshot.tunStack } : undefined }
+                try {
+                    addLog({ profileId: profile.id, profileName: profile.name, level: 'info', message: 'Applying updated bypass rules...' })
+                    const result = await window.electronAPI!.connect(enriched)
+                    if (!result.success) throw new Error(result.error || 'Could not apply routing settings')
+                    addLog({ profileId: profile.id, profileName: profile.name, level: 'success', message: 'Bypass settings applied to active connection' })
+                } catch (error) {
+                    succeeded = false
+                    pendingRouting.current = null
+                    addLog({ profileId: profile.id, profileName: profile.name, level: 'error', message: `Settings saved; reconnect to apply them: ${String(error)}` })
                 }
-            } catch (err) {
-                console.error('Failed to apply settings live:', err)
             }
-        }
-    }, [connectionState, currentProfile, settings, addLog])
+            return succeeded
+        })()
+        applyingRouting.current = apply
+        try { return await apply } finally { applyingRouting.current = null }
+    }, [addLog])
 
     const contextValue = useMemo(() => ({
         connectionState,

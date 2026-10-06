@@ -6,7 +6,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
-use tokio::io::AsyncWriteExt;
+use tokio::io::AsyncReadExt;
 use crate::commands::{self, AppState};
 
 const REPO: &str = "morezaGeek/SecureVPN";
@@ -46,6 +46,7 @@ struct Asset {
 fn client() -> Result<Client, String> {
     Client::builder()
         .user_agent(concat!("SecureVPN/", env!("CARGO_PKG_VERSION")))
+        .http1_only().tcp_nodelay(true).pool_max_idle_per_host(4)
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(900))
         .redirect(Policy::custom(|attempt| {
@@ -117,29 +118,28 @@ async fn download_installer(
 ) -> Result<(), String> {
     let expected = expected_hash(asset.digest.as_deref())?;
     let result: Result<(), String> = async {
-        let mut response = client.get(&asset.browser_download_url).send().await
-            .map_err(|e| format!("Download failed: {e}"))?
-            .error_for_status().map_err(|e| e.to_string())?;
-        let file = tokio::fs::File::create(part).await.map_err(|e| e.to_string())?;
-        let mut file = tokio::io::BufWriter::with_capacity(1024 * 1024, file);
-        let mut hash = Sha256::new();
-        let mut downloaded = 0u64;
-        let mut last_percent = 101;
-        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-            downloaded += chunk.len() as u64;
-            if downloaded > asset.size || downloaded > MAX_SIZE { return Err("Installer exceeds the expected size".into()); }
-            hash.update(&chunk);
-            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-            let percent = downloaded * 100 / asset.size;
-            if percent != last_percent {
+        if asset.size == 0 || asset.size > MAX_SIZE { return Err("Invalid installer size".into()); }
+        let last_percent = std::sync::atomic::AtomicU64::new(101);
+        let _method = crate::update_transfer::download(client, &asset.browser_download_url, asset.size, part, asset.size >= 8*1024*1024, |downloaded| {
+            let percent = downloaded*100/asset.size;
+            if percent != last_percent.load(Ordering::Relaxed) {
                 on_progress(Progress { downloaded, total: asset.size, phase: "downloading" });
-                last_percent = percent;
+                last_percent.store(percent, Ordering::Relaxed);
             }
+        }).await?;
+        #[cfg(test)]
+        println!("Installer transfer: {_method:?}");
+        // Hash the assembled file, never concatenate hashes of individual ranges.
+        let mut file = tokio::fs::File::open(part).await.map_err(|e|e.to_string())?;
+        let mut buffer = vec![0u8;256*1024];
+        let mut hash = Sha256::new();let mut downloaded = 0;
+        loop {
+            let bytes = file.read(&mut buffer).await.map_err(|e|e.to_string())?;
+            if bytes==0 { break; }
+            hash.update(&buffer[..bytes]);downloaded+=bytes as u64;
         }
-        file.flush().await.map_err(|e| e.to_string())?;
-        file.get_ref().sync_all().await.map_err(|e| e.to_string())?;
         drop(file);
-        verify_download(downloaded, asset.size, &format!("{:x}", hash.finalize()), &expected)?;
+        verify_download(downloaded, asset.size, &format!("{:x}",hash.finalize()), &expected)?;
         // A previous verified installer may exist after a cancelled installation.
         if tokio::fs::try_exists(installer).await.map_err(|e| e.to_string())? {
             tokio::fs::remove_file(installer).await.map_err(|e| e.to_string())?;
@@ -265,6 +265,13 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
+            // Large installers first probe Range support; this server ignores
+            // ranges, so the downloader must retry with one complete request.
+            let (mut probe, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            probe.read(&mut request).await.unwrap();
+            probe.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            drop(probe);
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 1024];
             socket.read(&mut request).await.unwrap();
@@ -286,6 +293,34 @@ mod tests {
         println!("Buffered 36 MiB installer including partial final buffer: {:.2}s",started.elapsed().as_secs_f64());
         tokio::fs::remove_file(installer).await.unwrap();tokio::fs::remove_dir(dir).await.unwrap();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "Compare single and parallel public downloads; verify both hashes; never install"]
+    async fn live_single_parallel_comparison() {
+        let client=client().unwrap();
+        let (_,asset)=select_update(fetch_releases(&client).await.unwrap(),&Version::parse("0.0.0").unwrap()).unwrap();
+        let expected=expected_hash(asset.digest.as_deref()).unwrap();
+        let directory=std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scratch/windows-diagnostics/update-comparison");
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        for parallel in [false,true] {
+            let part=directory.join(format!("comparison-{parallel}.part"));
+            let started=std::time::Instant::now();
+            let quarter=std::sync::atomic::AtomicU64::new(0);
+            let method=crate::update_transfer::download(&client,&asset.browser_download_url,asset.size,&part,parallel,|bytes| {
+                let current=bytes*4/asset.size;
+                if current>quarter.load(Ordering::Relaxed) {
+                    quarter.store(current,Ordering::Relaxed);
+                    println!("parallel={parallel}: {}% in {:.2}s",bytes*100/asset.size,started.elapsed().as_secs_f64());
+                }
+            }).await.unwrap();
+            let elapsed=started.elapsed().as_secs_f64();
+            let data=tokio::fs::read(&part).await.unwrap();
+            verify_download(data.len() as u64,asset.size,&format!("{:x}",Sha256::digest(&data)),&expected).unwrap();
+            println!("Verified {method:?}: {elapsed:.2}s, {:.2} Mbps average, {} bytes",asset.size as f64*8.0/elapsed/1_000_000.0,asset.size);
+            tokio::fs::remove_file(part).await.unwrap();
+        }
+        tokio::fs::remove_dir(directory).await.unwrap();
     }
 
     #[tokio::test]

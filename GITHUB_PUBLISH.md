@@ -2,7 +2,14 @@
 
 مخزن: `morezaGeek/SecureVPN`، شاخهٔ `main`.
 
-## آخرین انتشار Windows2.0.36، 2026-10-06
+## Windows2.0.37 — آمادهٔ انتشار، 2026-10-06
+
+[SecureVPN-v2.0.37-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.37-Setup.exe>)، x64، **36,849,111 بایت**، حدود35.14MiB، SHA256 `A3F443DC2A11BF378CFE5C3306228E0C710D11F10C4C436B0348C28D6AAE39ED`.
+helper محلی `scratch/windows-diagnostics/publish-2.0.37.cjs`؛ سورس ابتدا push، سپس asset draft/download/hash و انتشار عمومی. تصویر کاربر نصب36 را تأیید می‌کند ولی مسیر ارتقا مشخص نشده.37 هنوز دستی نصب نشده و ابتدا باید منتشر شود.
+
+دانلود موازی متعلق به کد37 است؛ دانلود خود37 از client36 همچنان تک‌اتصال خواهد بود. برای A/B همان فایل36،86.47ثانیه تک‌اتصال و12.52ثانیه موازی و hash صحیح تأیید شدند.
+
+## انتشار قبلی Windows2.0.36، 2026-10-06
 
 [SecureVPN-v2.0.36-Setup.exe](<H:/Antigravity Projects/VPN APP/SecureVPN-v2.0.36-Setup.exe>)، x64، **36,785,885 بایت**، حدود35.08MiB. SHA256: `D5F74AC646B1C19644FDA4CD445A1402D3F0E8CF3D354A9A857C78EC879BDBA8`.
 helper محلی `scratch/windows-diagnostics/publish-2.0.36.cjs`؛ سورس `057dd859b4158c8e1e160ceaf4e335be0b9d598b` ابتدا push، فایل در draft آپلود/download/hash و سپس عمومی و digest/tag تأیید شدند. نسخهٔ نصب‌شده35 باقی می‌ماند تا نشان Update بعد از انتشار36 بررسی شود؛ نصب دستی36 انجام نشده است.

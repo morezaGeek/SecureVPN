@@ -18,6 +18,16 @@ pub struct AppState {
 
 pub use crate::system_proxy::clear_app_system_proxy;
 
+fn hidden_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command
+}
+
 #[tauri::command]
 pub async fn app_minimize(window: Window) -> Result<(), String> {
     window.minimize().map_err(|e| e.to_string())
@@ -37,7 +47,7 @@ pub async fn app_close(window: Window, state: State<'_, AppState>) -> Result<(),
     clear_app_system_proxy();
     let mut pid_lock = state.active_pid.lock().await;
     if let Some(pid) = *pid_lock {
-        let _ = std::process::Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output();
         *pid_lock = None;
@@ -119,7 +129,7 @@ pub async fn vpn_get_state(state: State<'_, AppState>) -> Result<VpnState, Strin
 
 #[tauri::command]
 pub async fn vpn_is_elevated() -> Result<bool, String> {
-    let output = std::process::Command::new("net")
+    let output = hidden_command("net")
         .arg("session")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -145,7 +155,7 @@ pub async fn vpn_connect(
 
     // Disconnect if already connected
     if let Some(pid) = *pid_lock {
-        let _ = std::process::Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output();
         *pid_lock = None;
@@ -371,7 +381,7 @@ pub async fn vpn_disconnect(app: AppHandle, state: State<'_, AppState>) -> Resul
     cleanup_openconnect_routes(server_ip.as_deref(), Some("SecureVPN"));
 
     if let Some(pid) = *pid_lock {
-        let _ = std::process::Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output();
         *pid_lock = None;
@@ -381,7 +391,7 @@ pub async fn vpn_disconnect(app: AppHandle, state: State<'_, AppState>) -> Resul
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let _ = std::process::Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(["/F", "/IM", "openconnect.exe"])
             .creation_flags(CREATE_NO_WINDOW)
             .output();

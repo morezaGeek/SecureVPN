@@ -1318,14 +1318,14 @@ body {
 }
 
 /* Shared updater controls for sidebar and Settings. */
-.update-footer-control { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.update-footer-control { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
 .update-sidebar-button { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 0; color: var(--text-secondary); font-size: .78rem; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
 .update-sidebar-button:hover { background: var(--bg-active); color: var(--accent-primary); }
 .update-sidebar-button.available { color: var(--accent-primary); font-weight: 700; background: var(--bg-active); }
 .update-sidebar-button:disabled { cursor: progress; opacity: .7; }
 .update-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0; }
 .update-error { display: block; color: var(--accent-red, #d33); font-size: 11px; overflow-wrap: anywhere; max-width: 100%; }
-.update-footer-control .update-error { max-width: 110px; text-align: right; }
+.update-footer-control .update-error { text-align: left; }
 .update-settings-control { display: flex; align-items: center; flex-direction: column; gap: 8px; }
 .update-settings-control .btn { display: inline-flex; align-items: center; gap: 8px; }
 .update-message { color: var(--text-secondary); font-size: 12px; }

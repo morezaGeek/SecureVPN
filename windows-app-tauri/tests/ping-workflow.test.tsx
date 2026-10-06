@@ -4,6 +4,10 @@ import { create, act } from 'react-test-renderer'
 import App from '../src/App'
 import { VpnProvider, useVpn } from '../src/context/VpnContext'
 import HomeScreen from '../src/screens/HomeScreen'
+import SettingsScreen from '../src/screens/SettingsScreen'
+import { ThemeProvider } from '../src/context/ThemeContext'
+import { UpdateProvider } from '../src/context/UpdateContext'
+import UpdateButton from '../src/components/UpdateButton'
 const storage = new Map<string,string>()
 Object.assign(globalThis, {
  localStorage: {getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>storage.set(k,v),removeItem:(k:string)=>storage.delete(k)},
@@ -53,6 +57,49 @@ async function run(){
  await flush(()=>vpnListener({status:'disconnected'}));await flush(()=>vpnListener({status:'connected',profile:fixtures[2]}));
  await flush(()=>latencyPending.shift()!({success:true,latency:997}));assert.ok(!text(tree.toJSON()).includes('997ms'))
  await flush(()=>latencyPending.shift()!({success:true,latency:88}));assert.ok(text(tree.toJSON()).includes('88ms'))
- await flush(()=>tree.unmount());console.log('PASS: selected-sub scope, cancellation, late events, duplicate clicks, restart/navigation persistence, reconnect latency generation')
+ await flush(()=>tree.unmount());
+ let routingCalls:any[]=[];let routingPending:((result:any)=>void)[]=[];let activeRouting=0,maxActiveRouting=0;
+ (api as any).connect=(p:any)=>{
+  routingCalls.push(p);activeRouting++;maxActiveRouting=Math.max(maxActiveRouting,activeRouting);
+  return new Promise(resolve=>routingPending.push(result=>{activeRouting--;resolve(result)}))
+ }
+ await flush(()=>{tree=create(<ThemeProvider><VpnProvider><UpdateProvider><Capture/><SettingsScreen/></UpdateProvider></VpnProvider></ThemeProvider>)});
+ await flush(()=>vpnListener({status:'connected',profile:fixtures[0]}));
+ const inputs=()=>tree.root.findAllByType('textarea')
+ for(let i=0;i<5;i++)await flush(()=>inputs()[1].props.onBlur());
+ assert.equal(routingCalls.length,0,'Unchanged blur must not reconnect')
+ await flush(()=>inputs()[1].props.onChange({target:{value:'1.1.1.1\n10.50.0.0/16'}}));
+ await flush(()=>inputs()[1].props.onBlur());
+ await act(()=>{tree.root.findByProps({'aria-label':'Save bypass IPs'}).props.onClick()});
+ assert.equal(routingCalls.length,1,'Blur followed by Save must apply once')
+ await flush(()=>inputs()[0].props.onChange({target:{value:'https://example.com/a\n*.example.com'}}));
+ await flush(()=>inputs()[0].props.onBlur());
+ assert.equal(routingCalls.length,1,'Domain edit must queue behind an in-flight IP apply')
+ await flush(()=>routingPending.shift()!({success:true}));
+ assert.equal(routingCalls.length,2);assert.equal(maxActiveRouting,1);
+ assert.deepEqual(routingCalls[1].bypassDomains,['example.com']);assert.deepEqual(routingCalls[1].bypassIps,['1.1.1.1','10.50.0.0/16']);
+ await flush(()=>routingPending.shift()!({success:true}));
+ for(let i=0;i<5;i++)await flush(()=>{inputs()[0].props.onBlur();inputs()[1].props.onBlur()});
+ assert.equal(routingCalls.length,2,'Neither input may restart repeatedly after save')
+ ;(document as any).hasFocus=()=>false;
+ await flush(()=>inputs()[1].props.onChange({target:{value:'192.168.10.5'}}));await flush(()=>inputs()[1].props.onBlur());
+ assert.equal(routingCalls.length,2,'Losing application focus must not apply a partial edit')
+ ;(document as any).hasFocus=()=>true;
+ await act(()=>{tree.root.findByProps({'aria-label':'Save bypass IPs'}).props.onClick()});
+ assert.equal(routingCalls.length,3);await flush(()=>routingPending.shift()!({success:true}));
+ const saved=JSON.parse(storage.get('vpn-settings')!);assert.deepEqual(saved.bypassIps,['192.168.10.5']);assert.deepEqual(saved.bypassDomains,['example.com']);
+ await flush(()=>tree.unmount());
+ let checks=0,installs=0,externalOpens=0;let updatePending:((result:any)=>void)[]=[];
+ ;(api as any).checkUpdate=()=>{checks++;return new Promise(resolve=>updatePending.push(resolve))};
+ ;(api as any).installUpdate=async()=>{installs++};(api as any).openExternal=()=>{externalOpens++};
+ await flush(()=>{tree=create(<UpdateProvider><UpdateButton compact/></UpdateProvider>)});
+ assert.equal(checks,1);assert.equal(button(tree,'Checking…').props.disabled,true);
+ await flush(()=>updatePending.shift()!(null));assert.ok(text(tree.toJSON()).includes('Up to date'));
+ await flush(()=>button(tree,'Check for Updates').props.onClick());assert.equal(checks,2);
+ await flush(()=>updatePending.shift()!({version:'2.0.38'}));assert.ok(button(tree,'Update'));
+ assert.equal(externalOpens,0,'Sidebar manual check must call updater instead of opening releases');
+ assert.equal(installs,0,'Checking must not install automatically');
+ await flush(()=>button(tree,'Update').props.onClick());assert.equal(installs,1);
+ await flush(()=>tree.unmount());console.log('PASS: ping workflows, persistence, bypass save deduplication/serialization/focus and sidebar manual update checking/installation')
 }
 run().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1)})

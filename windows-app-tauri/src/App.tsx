@@ -87,7 +87,7 @@ function App() {
                                 </button>
                             </div>
 
-                            <div className="sidebar-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
+                            <div className="sidebar-footer" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px', padding: '0 4px' }}>
                                 <span className="version-text" style={{ fontSize: '0.8rem' }}>
                                     v{packageJson.version}
                                 </span>

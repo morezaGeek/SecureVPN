@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useVpn } from '../context/VpnContext'
 import { useTheme } from '../context/ThemeContext'
 import { Sun, Moon, Bell, Shield, Globe, Network, Check, Save } from 'lucide-react'
@@ -22,6 +22,24 @@ export default function SettingsScreen() {
         setBypassIpsInput((settings.bypassIps || []).join('\n'))
     }, [settings.bypassIps])
 
+    const savedTimers = useRef<{ domains?: ReturnType<typeof setTimeout>; ips?: ReturnType<typeof setTimeout> }>({})
+    const mounted = useRef(true)
+    const [saveError, setSaveError] = useState('')
+    useEffect(() => {
+        mounted.current = true
+        return () => {
+            mounted.current = false
+            Object.values(savedTimers.current).forEach(clearTimeout)
+        }
+    }, [])
+
+    const markSaved = (kind: 'domains' | 'ips') => {
+        const setter = kind === 'domains' ? setDomainsSaved : setIpsSaved
+        if (savedTimers.current[kind]) clearTimeout(savedTimers.current[kind])
+        setter(true)
+        savedTimers.current[kind] = setTimeout(() => setter(false), 2500)
+    }
+
     const sanitizeInputDomain = (d: string) => {
         return d.trim()
             .replace(/^https?:\/\//i, '')
@@ -33,34 +51,38 @@ export default function SettingsScreen() {
             .toLowerCase()
     }
 
-    const saveDomains = (value: string) => {
+    const saveDomains = async (value: string) => {
         const domains = value
             .split(/[\n,]+/)
             .map(sanitizeInputDomain)
             .filter(Boolean)
         const unique = Array.from(new Set(domains))
-        updateSettings({ bypassDomains: unique })
-        setDomainsSaved(true)
-        setTimeout(() => setDomainsSaved(false), 2500)
+        const applied = await updateSettings({ bypassDomains: unique })
+        if (!mounted.current) return
+        setSaveError(applied ? '' : 'Settings saved. Reconnect to apply changes.')
+        markSaved('domains')
     }
 
-    const saveIps = (value: string) => {
+    const saveIps = async (value: string) => {
         const ips = value
             .split(/[\n,]+/)
             .map(ip => ip.trim())
             .filter(Boolean)
         const unique = Array.from(new Set(ips))
-        updateSettings({ bypassIps: unique })
-        setIpsSaved(true)
-        setTimeout(() => setIpsSaved(false), 2500)
+        const applied = await updateSettings({ bypassIps: unique })
+        if (!mounted.current) return
+        setSaveError(applied ? '' : 'Settings saved. Reconnect to apply changes.')
+        markSaved('ips')
     }
 
     const handleDomainsBlur = () => {
-        saveDomains(bypassDomainsInput)
+        if (document.hasFocus?.() === false) return
+        void saveDomains(bypassDomainsInput)
     }
 
     const handleIpsBlur = () => {
-        saveIps(bypassIpsInput)
+        if (document.hasFocus?.() === false) return
+        void saveIps(bypassIpsInput)
     }
 
     return (
@@ -245,6 +267,7 @@ export default function SettingsScreen() {
 
                         <button
                             type="button"
+                            aria-label="Save bypass domains"
                             onClick={() => saveDomains(bypassDomainsInput)}
                             style={{
                                 display: 'inline-flex',
@@ -262,7 +285,7 @@ export default function SettingsScreen() {
                             }}
                         >
                             {domainsSaved ? <Check size={14} /> : <Save size={14} />}
-                            {domainsSaved ? (connectionState === 'connected' ? 'Applied Live!' : 'Saved') : 'Save'}
+                            {domainsSaved ? (connectionState === 'connected' && !saveError ? 'Applied Live!' : 'Saved') : 'Save'}
                         </button>
                     </div>
 
@@ -271,6 +294,7 @@ export default function SettingsScreen() {
                     </span>
 
                     <textarea
+                        aria-label="Bypass domains"
                         className="form-input"
                         rows={4}
                         placeholder={`example.com\n.local\nsub.internal-service.net`}
@@ -295,6 +319,7 @@ export default function SettingsScreen() {
 
                         <button
                             type="button"
+                            aria-label="Save bypass IPs"
                             onClick={() => saveIps(bypassIpsInput)}
                             style={{
                                 display: 'inline-flex',
@@ -312,7 +337,7 @@ export default function SettingsScreen() {
                             }}
                         >
                             {ipsSaved ? <Check size={14} /> : <Save size={14} />}
-                            {ipsSaved ? (connectionState === 'connected' ? 'Applied Live!' : 'Saved') : 'Save'}
+                            {ipsSaved ? (connectionState === 'connected' && !saveError ? 'Applied Live!' : 'Saved') : 'Save'}
                         </button>
                     </div>
 
@@ -321,6 +346,7 @@ export default function SettingsScreen() {
                     </span>
 
                     <textarea
+                        aria-label="Bypass IPs and subnets"
                         className="form-input"
                         rows={4}
                         placeholder={`1.1.1.1\n10.50.0.0/16\n192.168.10.5`}
@@ -336,6 +362,7 @@ export default function SettingsScreen() {
                 </div>
             </div>
 
+            {saveError && <p role="status" style={{ color: 'var(--warning)' }}>{saveError}</p>}
             {/* About */}
             <div className="settings-section">
                 <h3 className="settings-section-title">About</h3>

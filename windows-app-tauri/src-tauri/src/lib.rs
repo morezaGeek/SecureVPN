@@ -1,5 +1,6 @@
 mod system_proxy;
 mod latency;
+mod update_transfer;
 mod commands;
 pub mod iran_ips;
 mod openconnect;

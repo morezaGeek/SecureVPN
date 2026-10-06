@@ -16,126 +16,7 @@ pub struct AppState {
     pub is_running: Arc<AtomicBool>,
 }
 
-pub fn set_system_proxy(enable: bool, profile: Option<&Value>) {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-        if enable {
-            let _ = Command::new("reg")
-                .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
-
-            let _ = Command::new("reg")
-                .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", "127.0.0.1:2080", "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
-
-            let mut override_parts: Vec<String> = vec!["<local>".to_string(), "127.*".to_string()];
-
-            let bypass_private = profile.map(|p| {
-                p.get("bypassPrivateIps").and_then(|v| v.as_bool())
-                    .or_else(|| p.get("singboxConfig").and_then(|c| c.get("bypassPrivateIps")).and_then(|v| v.as_bool()))
-                    .unwrap_or(false)
-            }).unwrap_or(false);
-
-            if bypass_private {
-                override_parts.extend([
-                    "10.*".to_string(),
-                    "172.16.*".to_string(), "172.17.*".to_string(), "172.18.*".to_string(), "172.19.*".to_string(),
-                    "172.20.*".to_string(), "172.21.*".to_string(), "172.22.*".to_string(), "172.23.*".to_string(),
-                    "172.24.*".to_string(), "172.25.*".to_string(), "172.26.*".to_string(), "172.27.*".to_string(),
-                    "172.28.*".to_string(), "172.29.*".to_string(), "172.30.*".to_string(), "172.31.*".to_string(),
-                    "192.168.*".to_string(),
-                ]);
-            }
-
-            if let Some(p) = profile {
-                let singbox_cfg = p.get("singboxConfig");
-
-                // Custom Domains
-                let domains = p.get("bypassDomains")
-                    .or_else(|| singbox_cfg.and_then(|c| c.get("bypassDomains")));
-                if let Some(arr) = domains.and_then(|v| v.as_array()) {
-                    for d_val in arr {
-                        if let Some(d) = d_val.as_str() {
-                            let clean = crate::singbox::sanitize_domain(d);
-                            if !clean.is_empty() {
-                                if !override_parts.contains(&clean) {
-                                    override_parts.push(clean.clone());
-                                }
-                                let star_dot = format!("*.{}", clean);
-                                if !override_parts.contains(&star_dot) {
-                                    override_parts.push(star_dot);
-                                }
-                                let star_domain = format!("*{}", clean);
-                                if !override_parts.contains(&star_domain) {
-                                    override_parts.push(star_domain);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Custom IPs
-                let ips = p.get("bypassIps")
-                    .or_else(|| singbox_cfg.and_then(|c| c.get("bypassIps")));
-                if let Some(arr) = ips.and_then(|v| v.as_array()) {
-                    for ip_val in arr {
-                        if let Some(ip_str) = ip_val.as_str() {
-                            let clean = ip_str.trim();
-                            if !clean.is_empty() {
-                                override_parts.push(clean.to_string());
-                            }
-                        }
-                    }
-                }
-
-                // Iran Bypass
-                let bypass_iran = p.get("bypassIranRoutes").and_then(|v| v.as_bool())
-                    .or_else(|| singbox_cfg.and_then(|c| c.get("bypassIranRoutes")).and_then(|v| v.as_bool()))
-                    .unwrap_or(false);
-
-                if bypass_iran {
-                    override_parts.push("*.ir".to_string());
-                    override_parts.push("*.ir.*".to_string());
-                }
-            }
-
-            let override_val = override_parts.join(";");
-            let _ = Command::new("reg")
-                .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyOverride", "/t", "REG_SZ", "/d", &override_val, "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
-            println!("[SystemProxy] Enabled Windows System Proxy (127.0.0.1:2080) with override: {}", override_val);
-        } else {
-            let _ = Command::new("reg")
-                .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
-            println!("[SystemProxy] Disabled Windows System Proxy");
-        }
-
-        unsafe {
-            #[link(name = "wininet")]
-            extern "system" {
-                fn InternetSetOptionW(
-                    h_internet: *mut std::ffi::c_void,
-                    dw_option: u32,
-                    lp_buffer: *mut std::ffi::c_void,
-                    dw_buffer_length: u32,
-                ) -> i32;
-            }
-            const INTERNET_OPTION_SETTINGS_CHANGED: u32 = 39;
-            const INTERNET_OPTION_REFRESH: u32 = 37;
-            InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_SETTINGS_CHANGED, std::ptr::null_mut(), 0);
-            InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_REFRESH, std::ptr::null_mut(), 0);
-        }
-    }
-}
+pub use crate::system_proxy::clear_app_system_proxy;
 
 #[tauri::command]
 pub async fn app_minimize(window: Window) -> Result<(), String> {
@@ -153,7 +34,7 @@ pub async fn app_maximize(window: Window) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn app_close(window: Window, state: State<'_, AppState>) -> Result<(), String> {
-    set_system_proxy(false, None);
+    clear_app_system_proxy();
     let mut pid_lock = state.active_pid.lock().await;
     if let Some(pid) = *pid_lock {
         let _ = std::process::Command::new("taskkill")
@@ -307,7 +188,7 @@ pub async fn vpn_connect(
             let _ = app.emit("vpn:stateChanged", s.clone());
 
             if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
-                set_system_proxy(true, Some(&profile));
+                clear_app_system_proxy();
             }
 
 #[cfg(windows)]
@@ -477,7 +358,7 @@ fn get_windows_network_bytes() -> Option<(u64, u64)> {
 
 #[tauri::command]
 pub async fn vpn_disconnect(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
-    set_system_proxy(false, None);
+    clear_app_system_proxy();
 
     let mut s = state.vpn_state.lock().await;
     let mut pid_lock = state.active_pid.lock().await;

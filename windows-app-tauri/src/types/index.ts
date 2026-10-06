@@ -19,7 +19,7 @@ export interface SingboxProfile {
     uuid: string                    // VLESS/VMess UUID or Trojan/SS password
     address: string
     port: number
-    encryption?: string             // "none" for VLESS, "auto" for VMess
+    encryption?: string             // VLESS: "none" or the original encryption key; VMess: cipher
     transport: SingboxTransport
     security: SingboxSecurity
     // Optional legacy imported TLS/REALITY metadata used for the protocol badge.

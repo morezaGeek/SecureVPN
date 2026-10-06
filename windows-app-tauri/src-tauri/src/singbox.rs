@@ -161,6 +161,10 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
                 "server_port": port,
                 "uuid": uuid
             });
+            if let Some(encryption) = singbox_cfg.get("encryption").and_then(Value::as_str)
+                .map(str::trim).filter(|value| !value.is_empty() && *value != "none") {
+                o["encryption"] = json!(encryption);
+            }
             if transport != "ws" && transport != "httpupgrade" && transport != "xhttp" {
                 o["packet_encoding"] = json!("xudp");
             }
@@ -226,15 +230,7 @@ pub async fn build_singbox_outbound_with_tag(profile: &Value, tag: &str) -> Resu
             let alpn = if transport == "ws" || transport == "httpupgrade" {
                 // WebSocket and HttpUpgrade MUST negotiate HTTP/1.1!
                 // Reverse proxies / CDNs (especially Cloudflare) reject or reset WebSocket if HTTP/2 is negotiated.
-                if let Some(custom) = custom_alpn {
-                    if custom.iter().any(|p| p == "http/1.1") {
-                        custom
-                    } else {
-                        vec!["http/1.1".to_string()]
-                    }
-                } else {
-                    vec!["http/1.1".to_string()]
-                }
+                vec!["http/1.1".to_string()]
             } else if transport == "xhttp" || transport == "grpc" {
                 custom_alpn.unwrap_or_else(|| vec!["h2".to_string()])
             } else if let Some(custom) = custom_alpn {
@@ -846,7 +842,7 @@ pub async fn spawn_singbox(
     tokio::spawn(async move {
         let status = child.wait().await;
         is_running_clone.store(false, Ordering::SeqCst);
-        crate::commands::set_system_proxy(false, None);
+        crate::commands::clear_app_system_proxy();
         let _ = app_clone3.emit("vpn:stateChanged", VpnState {
             status: "disconnected".into(),
             profile: None,
@@ -886,6 +882,32 @@ mod tests {
     fn fatal_connection_errors_are_not_hidden_by_noise_filter() {
         assert!(!is_noisy_singbox_log("FATAL initialize router: context deadline exceeded"));
         assert!(is_noisy_singbox_log("connection download: context canceled"));
+    }
+
+    #[tokio::test]
+    async fn encrypted_vless_keeps_key_and_ws_only_negotiates_http11() {
+        let mut profile = json!({"protocol":"vless","serverAddress":"192.0.2.1","port":2053,
+            "singboxConfig":{"uuid":"00000000-0000-4000-8000-000000000001","transport":"ws",
+                "security":"tls","sni":"example.com","alpn":["h2","http/1.1","h3"],
+                "encryption":"mlkem768x25519plus.native.0rtt.test-key"}});
+        let (_, _, outbound) = build_singbox_outbound(&profile).await.unwrap();
+        assert_eq!(outbound["encryption"], profile["singboxConfig"]["encryption"]);
+        assert_eq!(outbound["tls"]["alpn"], json!(["http/1.1"]));
+        for transport in ["httpupgrade", "tcp", "xhttp"] {
+            profile["singboxConfig"]["transport"] = json!(transport);
+            let (_, _, outbound) = build_singbox_outbound(&profile).await.unwrap();
+            assert_eq!(outbound["encryption"], profile["singboxConfig"]["encryption"]);
+            if transport == "httpupgrade" { assert_eq!(outbound["tls"]["alpn"], json!(["http/1.1"])); }
+            else { assert_eq!(outbound["tls"]["alpn"], profile["singboxConfig"]["alpn"]); }
+        }
+        profile["singboxConfig"]["encryption"] = json!("none");
+        let (_, _, outbound) = build_singbox_outbound(&profile).await.unwrap();
+        assert!(outbound.get("encryption").is_none());
+        profile["protocol"] = json!("vmess");
+        profile["singboxConfig"]["encryption"] = json!("auto");
+        let (_, _, outbound) = build_singbox_outbound(&profile).await.unwrap();
+        assert_eq!(outbound["security"], "auto");
+        assert!(outbound.get("encryption").is_none());
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Secure VPN",
-  "version": "2.0.34",
+  "version": "2.0.35",
   "identifier": "com.securevpn.windows",
   "build": {
     "beforeDevCommand": "npm run dev",

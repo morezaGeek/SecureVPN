@@ -1,3 +1,4 @@
+mod system_proxy;
 mod commands;
 pub mod iran_ips;
 mod openconnect;
@@ -44,7 +45,7 @@ pub fn run() {
         .manage(updater::UpdateState::default())
         .setup(|app| {
             // Ensure system proxy is cleared on startup
-            commands::set_system_proxy(false, None);
+            commands::clear_app_system_proxy();
 
             // Build Initial Tray Menu
             let start_item = MenuItem::with_id(app, "start_vpn", "Start VPN", true, None::<&str>)?;
@@ -90,7 +91,7 @@ pub fn run() {
                         show_main_window(app);
                     }
                     "quit" => {
-                        commands::set_system_proxy(false, None);
+                        commands::clear_app_system_proxy();
                         app.exit(0);
                     }
                     "start_vpn" => {
@@ -128,7 +129,7 @@ pub fn run() {
         })
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                commands::set_system_proxy(false, None);
+                commands::clear_app_system_proxy();
             }
         })
         .invoke_handler(tauri::generate_handler![

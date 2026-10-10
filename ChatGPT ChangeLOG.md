@@ -804,7 +804,7 @@ Gradle با JDK 25 و TEMP بلند sandbox در socket محلی شکست می�
 - سورس فعال ویندوز `windows-app-tauri/` است؛ نسخهٔ جدید **2.0.38**. سورس فعال Android Play در **`scratch/SecureVPN-Android-source/`**، یک checkout مستقل از مخزن خصوصی اندروید است؛ نسخهٔ **1.0.1 / versionCode 2**، package `com.rahanetmci.securevpn`. ریشهٔ `app/` سورس قدیمی sideload است و در این نوبت تغییر نکرده؛ توسعهٔ بعدی نباید آن را با سورس فعلی Play اشتباه بگیرد.
 - فایل‌ها در `SecureVPN-Updates-2026-10-10/`: ستاپ Windows x64، APK release امضاشده با upload key، AAB برای Play، README و SHA256.json. APK حدود 128.4 MiB و AAB حدود 132.8 MiB است؛ AAB شامل چهار ABI است و حجم نصب Play با آن برابر نیست. کلید امضا و کانفیگ کاربران در پوشهٔ تحویل قرار نگرفتند.
 - اعتبار AAB با bundletool و امضای AAB/APK بررسی شد. امضای APK محلی upload key است؛ الزاماً با app-signing certificate نسخهٔ نصب‌شده از Play یکسان نیست. ارتقای نصب‌های Play باید با ارسال AAB جدید از همان رکورد Play انجام شود، نه با حذف اپ و داده‌ها برای نصب این APK.
-- در این نوبت Git commit/push، بارگذاری Play یا انتشار GitHub انجام نشد. بیلدها و تغییرات به‌صورت محلی آماده‌اند.
+- پس از آماده‌شدن بیلد، Windows 2.0.38 روی مخزن `morezaGeek/SecureVPN`، شاخهٔ `main` پوش شد؛ commit کد `a0c156343db6e858ca4cc87de4c5a0f9c1f4a650`. ریلیز عمومی [v2.0.38](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.38) و [نصاب Windows x64](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.38/SecureVPN-v2.0.38-Setup.exe) منتشر شد. فایل 36,854,350 بایت است؛ upload با download مجدد، SHA256، digest عمومی GitHub و تطبیق tag با commit تأیید شد. Commit دوم صرفاً وضعیت انتشار/changelog را ثبت می‌کند. Android AAB بارگذاری یا منتشر نشد.
 
 ### تفاوت ساب و راه‌حل اتصال
 

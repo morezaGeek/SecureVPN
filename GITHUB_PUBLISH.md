@@ -1,3 +1,9 @@
+## آخرین انتشار Windows 2.0.38، 2026-10-10
+
+مخزن `morezaGeek/SecureVPN`، شاخهٔ `main`. [ریلیز عمومی v2.0.38](https://github.com/morezaGeek/SecureVPN/releases/tag/v2.0.38)؛ [نصاب Windows x64](https://github.com/morezaGeek/SecureVPN/releases/download/v2.0.38/SecureVPN-v2.0.38-Setup.exe)، 36,854,350 بایت. SHA256: `4DC63DEE4F439D151BCCE0C975FE5A5E5E62707BED7E9612E56076E23A2E57AC`.
+
+کد محصول در commit `a0c156343db6e858ca4cc87de4c5a0f9c1f4a650` است؛ tag v2.0.38 به همین commit اشاره می‌کند. GitHub asset دانلود مجدد و hash، حجم و digest `sha256:` بررسی شدند. Handoff/changelog پس از انتشار در یک commit مستنداتی جدا پوش می‌شود. برای انتشار از helper محلی `scratch/windows-diagnostics/publish-2.0.38.cjs` استفاده شد؛ توکن فقط از `scratch/github-token.private.txt` خوانده شد و در GitHub سورس یا asset قرار نگرفت. Android AAB این انتشار شامل نیست.
+
 # GitHub publication handoff — 2026-10-06
 
 مخزن: `morezaGeek/SecureVPN`، شاخهٔ `main`.

@@ -12,7 +12,6 @@ type LatencyTestMode = 'manual' | '1s' | '5s' | '30s' | '60s'
 export default function HomeScreen() {
     const { connectionState, currentProfile, stats, profiles, subscriptions, selectProfile, connect, disconnect } = useVpn()
     const orderedProfiles = orderProfilesBySubscription(profiles, subscriptions)
-    const [elapsedTime, setElapsedTime] = useState(0)
     const [latency, setLatency] = useState<number | null>(null)
     const [isTestingLatency, setIsTestingLatency] = useState(false)
     const [latencyTestMode, setLatencyTestMode] = useState<LatencyTestMode>('manual')
@@ -34,23 +33,8 @@ export default function HomeScreen() {
     const isV2rayProtocol = currentProfile?.protocol &&
         ['vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria2'].includes(currentProfile.protocol)
 
-    // Update connection time - smooth local 1s timer when connected
-    useEffect(() => {
-        let interval: ReturnType<typeof setInterval> | null = null
-        if (connectionState === 'connected') {
-            const initialTime = stats.connectedTime || 0
-            const startTime = Date.now() - initialTime
-            setElapsedTime(initialTime)
-            interval = setInterval(() => {
-                setElapsedTime(Date.now() - startTime)
-            }, 1000)
-        } else {
-            setElapsedTime(0)
-        }
-        return () => {
-            if (interval) clearInterval(interval)
-        }
-    }, [connectionState])
+    // The service owns session time; switching tabs must not create a new clock.
+    const elapsedTime = connectionState === 'connected' ? stats.connectedTime : 0
 
     const latencySession = useRef(0)
     const latencyBusy = useRef(false)

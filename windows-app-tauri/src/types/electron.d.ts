@@ -55,7 +55,7 @@ export interface ElectronAPI {
     readFile: (filePath: string) => Promise<{ success: boolean; content?: string; error?: string }>
     fetchSubscription: (url: string) => Promise<{ success: boolean; headers?: Record<string, string>; content?: string; error?: string }>
     fetchOriginalIp: () => Promise<string>
-    onVpnStateChanged: (callback: (state: VpnState) => void) => void
+    onVpnStateChanged: (callback: (state: VpnState) => void) => void | (() => void)
     onVpnLog?: (callback: (log: VpnLog) => void) => void
     onPingResult?: (callback: (result: { profileId: string; latency: number; mode: string; requestId?: string }) => void) => void
     onTrayConnect: (callback: () => void) => void

@@ -100,6 +100,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
 
     const [logs, setLogs] = useState<ConnectionLog[]>([])
     const [settings, setSettings] = useState<AppSettings>(createDefaultSettings())
+    const [loaded, setLoaded] = useState(false)
 
     const settingsRef = useRef(settings)
     settingsRef.current = settings
@@ -125,7 +126,11 @@ export function VpnProvider({ children }: VpnProviderProps) {
 
         if (savedProfiles) {
             try {
-                setProfiles(JSON.parse(savedProfiles))
+                const restored: VpnProfile[] = JSON.parse(savedProfiles)
+                setProfiles(restored)
+                const selectedId = localStorage.getItem('vpn-selected-profile')
+                setCurrentProfile(restored.find(p => p.id === selectedId) ||
+                    restored.filter(p => (p.lastConnected || 0) > 0).sort((a, b) => (b.lastConnected || 0) - (a.lastConnected || 0))[0] || null)
             } catch (e) {
                 console.error('Failed to load profiles:', e)
             }
@@ -146,10 +151,13 @@ export function VpnProvider({ children }: VpnProviderProps) {
                 console.error('Failed to load settings:', e)
             }
         }
+        setLoaded(true)
 
         // Listen for VPN state changes from Electron
         if (window.electronAPI) {
-            window.electronAPI.onVpnStateChanged((state) => {
+            let eventRevision = 0
+            const dispose = window.electronAPI.onVpnStateChanged((state) => {
+                eventRevision++
                 setConnectionState(state.status)
                 if (state.profile) setCurrentProfile(state.profile)
                 if (state.stats) setStats({ ...state.stats, mtu: state.stats.mtu || 1400 })
@@ -191,6 +199,30 @@ export function VpnProvider({ children }: VpnProviderProps) {
             window.electronAPI.onPingResult?.((res) => {
                 if (res.requestId) acceptPing(res.profileId, res.latency, res.mode as any, res.requestId)
             })
+            // Recover the service snapshot after WebView throttling, remount or a missed event.
+            let disposed = false, busy = false
+            const sync = async () => {
+                if (busy || !window.electronAPI?.getVpnState) return
+                busy = true
+                const revision = eventRevision
+                try {
+                    const state = await window.electronAPI.getVpnState()
+                    if (disposed || revision !== eventRevision) return
+                    setConnectionState(state.status)
+                    if (state.profile) setCurrentProfile(state.profile)
+                    if (state.stats) setStats({ ...state.stats, mtu: state.stats.mtu || 1400 })
+                } catch { /* Keep last known state if the service is temporarily unavailable. */ }
+                finally { busy = false }
+            }
+            void sync()
+            const interval = setInterval(sync, 1000)
+            window.addEventListener('focus', sync)
+            return () => {
+                disposed = true
+                clearInterval(interval)
+                window.removeEventListener('focus', sync)
+                if (typeof dispose === 'function') dispose()
+            }
         }
     }, [])
 
@@ -204,18 +236,24 @@ export function VpnProvider({ children }: VpnProviderProps) {
 
     // Save profiles when changed
     useEffect(() => {
-        localStorage.setItem('vpn-profiles', JSON.stringify(profiles))
-    }, [profiles])
+        if (loaded) localStorage.setItem('vpn-profiles', JSON.stringify(profiles))
+    }, [profiles, loaded])
+
+    useEffect(() => {
+        if (!loaded) return
+        if (currentProfile) localStorage.setItem('vpn-selected-profile', currentProfile.id)
+        else localStorage.removeItem('vpn-selected-profile')
+    }, [currentProfile?.id, loaded])
 
     // Save subscriptions when changed
     useEffect(() => {
-        localStorage.setItem('vpn-subscriptions', JSON.stringify(subscriptions))
-    }, [subscriptions])
+        if (loaded) localStorage.setItem('vpn-subscriptions', JSON.stringify(subscriptions))
+    }, [subscriptions, loaded])
 
     // Save settings when changed
     useEffect(() => {
-        localStorage.setItem('vpn-settings', JSON.stringify(settings))
-    }, [settings])
+        if (loaded) localStorage.setItem('vpn-settings', JSON.stringify(settings))
+    }, [settings, loaded])
 
     const addLog = useCallback((log: Omit<ConnectionLog, 'id' | 'timestamp'>) => {
         const newLog: ConnectionLog = {
@@ -296,17 +334,31 @@ export function VpnProvider({ children }: VpnProviderProps) {
             // Replace profiles
             setProfiles(prev => {
                 const filtered = prev.filter(p => p.subscriptionId !== id)
-                const newProfiles = parsed.links.map(link => ({
+                const previous = prev.filter(p => p.subscriptionId === id)
+                const newProfiles = parsed.links.map(link => {
+                    let oldIndex = previous.findIndex(p => p.protocol === link.protocol &&
+                        p.serverAddress === link.config.address && p.port === link.config.port &&
+                        p.singboxConfig?.uuid === link.config.uuid && p.singboxConfig?.transport === link.config.transport &&
+                        (p.singboxConfig?.path || '/') === (link.config.path || '/'))
+                    if (oldIndex < 0) {
+                        // Providers can renew credentials/addresses while keeping a server's name.
+                        const candidates = previous.map((p, index) => ({ p, index })).filter(({ p }) =>
+                            p.name === link.name && p.protocol === link.protocol && p.singboxConfig?.transport === link.config.transport)
+                        if (candidates.length === 1) oldIndex = candidates[0].index
+                    }
+                    const old = oldIndex >= 0 ? previous.splice(oldIndex, 1)[0] : undefined
+                    return {
                     ...createDefaultProfile(),
-                    id: crypto.randomUUID(),
+                    id: old?.id || crypto.randomUUID(),
                     name: link.name,
                     serverAddress: link.config.address,
                     protocol: link.protocol,
                     port: link.config.port,
                     singboxConfig: link.config,
                     subscriptionId: id,
-                    createdAt: Date.now()
-                }))
+                    createdAt: old?.createdAt || Date.now(),
+                    lastConnected: old?.lastConnected,
+                }})
                 return [...filtered, ...newProfiles]
             })
 
@@ -327,6 +379,11 @@ export function VpnProvider({ children }: VpnProviderProps) {
             setRefreshingSubIds(prev => prev.filter(item => item !== id))
         }
     }, [addLog])
+
+    useEffect(() => {
+        if (!loaded || connectionState !== 'disconnected') return
+        setCurrentProfile(selected => selected ? profiles.find(p => p.id === selected.id) || null : null)
+    }, [profiles, loaded, connectionState])
 
     // Auto-refresh subscriptions on startup once loaded
     const initialRefreshDone = useRef(false)

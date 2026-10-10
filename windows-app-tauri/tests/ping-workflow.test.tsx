@@ -8,6 +8,7 @@ import SettingsScreen from '../src/screens/SettingsScreen'
 import { ThemeProvider } from '../src/context/ThemeContext'
 import { UpdateProvider } from '../src/context/UpdateContext'
 import UpdateButton from '../src/components/UpdateButton'
+import { parseShareLink, parseSubscriptionData, generateShareLink } from '../src/utils/linkParser'
 const storage = new Map<string,string>()
 Object.assign(globalThis, {
  localStorage: {getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>storage.set(k,v),removeItem:(k:string)=>storage.delete(k)},
@@ -22,7 +23,7 @@ storage.set('vpn-last-screen','profiles');storage.set('vpn-selected-subscription
 let context:any, pingListener:any, vpnListener:any, calls:any[]=[]
 let pending:((result:any)=>void)[]=[]
 let latencyPending:((result:any)=>void)[]=[]
-const api={onVpnStateChanged:(fn:any)=>vpnListener=fn,onVpnLog(){},onTrayConnect(){},onTrayDisconnect(){},onPingResult:(fn:any)=>pingListener=fn,
+const api={onVpnStateChanged:(fn:any)=>{vpnListener=fn;return ()=>{if(vpnListener===fn)vpnListener=()=>{}}},onVpnLog(){},onTrayConnect(){},onTrayDisconnect(){},onPingResult:(fn:any)=>pingListener=fn,
  batchRealDelay:(profiles:any[],url:any,requestId:string)=>{calls.push({ids:profiles.map(p=>p.id),requestId});return new Promise(resolve=>pending.push(resolve))},
  cancelPingTests:async()=>{},testLatency:()=>new Promise(resolve=>latencyPending.push(resolve)),fetchOriginalIp:async()=>null,
  tcpPing:async()=>({success:true,latency:41}),httpPing:async()=>({success:true,latency:42})}
@@ -32,6 +33,13 @@ function text(node:any):string {return Array.isArray(node)?node.map(text).join('
 function button(tree:any,label:string) {return tree.root.findAllByType('button').find((b:any)=>text(b.children)===label)!}
 function chip(tree:any,label:string) {return tree.root.findAllByType('div').find((b:any)=>b.props.className?.includes('profile-card') && text(b.children).trim()===label)!}
 async function run(){
+ const echLink='vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls&type=xhttp&mode=packet-up&ech=cloudflare-ech.com%2Budp%3A%2F%2F1.1.1.1&path=%2Ftest%252Fkeep#Finland';
+ const ech=parseShareLink(echLink)!;assert.equal(ech.config.ech,'cloudflare-ech.com+udp://1.1.1.1');assert.equal(ech.config.path,'/test%2Fkeep');
+ assert.deepEqual(parseShareLink(generateShareLink('vless',ech.name,ech.config)),ech);
+ assert.equal(parseSubscriptionData(echLink,{},'https://example.com/sub').links.length,1);
+ const gecko=parseShareLink('hysteria2://p%3A%40ss@example.com:443?obfs=gecko&obfs-password=test&minPacketSize=600&maxPacketSize=1300#Test')!;
+ assert.equal(gecko.config.uuid,'p:@ss');assert.equal(gecko.config.hysteriaObfsMinPacketSize,600);
+ assert.deepEqual(parseShareLink(generateShareLink('hysteria2',gecko.name,gecko.config)),gecko);
  let app:any;await flush(()=>{app=create(<App/>)});
  assert.ok(chip(app,'GozarVPN').props.className.includes('selected'))
  await act(()=>{button(app,'Test all').props.onClick()}); assert.deepEqual(calls[0].ids,['gozar-1','gozar-2'])
@@ -45,6 +53,9 @@ async function run(){
  await flush(()=>app.unmount());
  function Capture(){context=useVpn();return null}
  let tree:any;await flush(()=>{tree=create(<VpnProvider><Capture/><HomeScreen/></VpnProvider>)});
+ await flush(()=>context.selectProfile(fixtures[2]));assert.equal(storage.get('vpn-selected-profile'),'sale-1');
+ await flush(()=>tree.unmount());await flush(()=>{tree=create(<VpnProvider><Capture/><HomeScreen/></VpnProvider>)});
+ assert.equal(context.currentProfile?.id,'sale-1','Manual profile choice survives application restart');
  let old:any;await flush(()=>{old=context.testAllPings('real',['gozar-1']);void context.testAllPings('real',['sale-1'])});
  assert.equal(calls.length,2,'Immediate duplicate requests are rejected')
  await flush(()=>context.cancelPings());let next:any;await flush(()=>{next=context.testAllPings('real',['sale-1'])});
@@ -57,6 +68,23 @@ async function run(){
  await flush(()=>vpnListener({status:'disconnected'}));await flush(()=>vpnListener({status:'connected',profile:fixtures[2]}));
  await flush(()=>latencyPending.shift()!({success:true,latency:997}));assert.ok(!text(tree.toJSON()).includes('997ms'))
  await flush(()=>latencyPending.shift()!({success:true,latency:88}));assert.ok(text(tree.toJSON()).includes('88ms'))
+ const liveStats={uploadSpeed:8192,downloadSpeed:65536,totalUploaded:3000000,totalDownloaded:8000000,connectedTime:125000,privateIp:'172.19.0.1',publicIp:'1.2.3.4',mtu:1400};
+ await flush(()=>vpnListener({status:'connected',profile:fixtures[2],stats:liveStats}));assert.ok(text(tree.toJSON()).includes('2:05'));
+ await flush(()=>tree.update(<VpnProvider><Capture/></VpnProvider>));
+ await flush(()=>vpnListener({status:'connected',profile:fixtures[2],stats:{...liveStats,connectedTime:126000,downloadSpeed:131072}}));
+ await flush(()=>tree.update(<VpnProvider><Capture/><HomeScreen/></VpnProvider>));assert.ok(text(tree.toJSON()).includes('2:06'),'Tab remount uses service clock');assert.equal(context.stats.downloadSpeed,131072);
+ await flush(()=>tree.unmount());
+ let recovery:any;(api as any).getVpnState=()=>new Promise(resolve=>recovery=resolve);
+ await flush(()=>{tree=create(<VpnProvider><Capture/></VpnProvider>)});
+ await flush(()=>vpnListener({status:'connected',profile:fixtures[2],stats:liveStats}));
+ await flush(()=>recovery({status:'disconnected',profile:null,stats:{...liveStats,connectedTime:0}}));
+ assert.equal(context.connectionState,'connected','Older recovery response must not overwrite a newer live event');
+ assert.equal(context.stats.connectedTime,125000);await flush(()=>tree.unmount());delete (api as any).getVpnState;
+ (api as any).fetchSubscription=async()=>({success:true,content:'vless://00000000-0000-4000-8000-000000000001@renewed.example.com:443?security=tls&type=ws#gozar-1',headers:{}});
+ await flush(()=>{tree=create(<VpnProvider><Capture/></VpnProvider>)});
+ await flush(()=>context.selectProfile(context.profiles.find((p:any)=>p.id==='gozar-1')));
+ await flush(()=>context.refreshSubscription('gozar'));
+ assert.equal(context.currentProfile.id,'gozar-1','Subscription renewal keeps selected identity');assert.equal(context.currentProfile.serverAddress,'renewed.example.com');
  await flush(()=>tree.unmount());
  let routingCalls:any[]=[];let routingPending:((result:any)=>void)[]=[];let activeRouting=0,maxActiveRouting=0;
  (api as any).connect=(p:any)=>{

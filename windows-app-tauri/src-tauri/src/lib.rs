@@ -32,6 +32,7 @@ pub fn run() {
         vpn_state: Arc::new(Mutex::new(VpnState::default())),
         active_pid: Arc::new(Mutex::new(None)),
         is_running: Arc::new(AtomicBool::new(false)),
+        session: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
 
     tauri::Builder::default()

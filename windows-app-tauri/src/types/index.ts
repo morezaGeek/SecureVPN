@@ -28,6 +28,7 @@ export interface SingboxProfile {
     tunStack?: 'mixed' | 'gvisor' | 'system'
 
     // TLS options
+    ech?: string                   // ECH query domain + resolver from the share link
     sni?: string
     fingerprint?: string            // "chrome", "firefox", "safari", etc.
     alpn?: string[]
@@ -46,6 +47,8 @@ export interface SingboxProfile {
     // Hysteria2 specific
     hysteriaObfs?: string
     hysteriaObfsPassword?: string
+    hysteriaObfsMinPacketSize?: number
+    hysteriaObfsMaxPacketSize?: number
 
     // Reality specific  
     publicKey?: string

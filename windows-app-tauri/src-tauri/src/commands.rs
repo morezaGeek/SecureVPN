@@ -14,6 +14,7 @@ pub struct AppState {
     pub vpn_state: Arc<Mutex<VpnState>>,
     pub active_pid: Arc<Mutex<Option<u32>>>,
     pub is_running: Arc<AtomicBool>,
+    pub session: Arc<AtomicU64>,
 }
 
 pub use crate::system_proxy::clear_app_system_proxy;
@@ -161,6 +162,8 @@ pub async fn vpn_connect(
         *pid_lock = None;
     }
 
+    let session = state.session.fetch_add(1, Ordering::SeqCst) + 1;
+    s.stats = VpnStats::default();
     s.status = "connecting".into();
     s.profile = Some(profile.clone());
 
@@ -175,7 +178,7 @@ pub async fn vpn_connect(
         let config_path = temp_dir.join("secure-vpn-singbox.json");
 
         build_singbox_config(&profile, &config_path).await?;
-        spawn_singbox(app.clone(), bin_path, config_path, state.is_running.clone()).await
+        spawn_singbox(app.clone(), bin_path, config_path, state.is_running.clone(), state.vpn_state.clone(), state.session.clone(), session).await
     } else {
         let bin_path = resolve_binary(&app, "openconnect/openconnect.exe")?;
 
@@ -186,6 +189,7 @@ pub async fn vpn_connect(
             None,
             state.is_running.clone(),
             state.vpn_state.clone(),
+            state.session.clone(), session,
         ).await
     } }.await;
 
@@ -232,6 +236,7 @@ fn get_windows_network_bytes() -> Option<(u64, u64)> {
 
             // Spawn background stats monitor
             let is_running_stats = state.is_running.clone();
+            let session_stats = state.session.clone();
             let vpn_state_arc = state.vpn_state.clone();
             let app_stats = app.clone();
             tokio::spawn(async move {
@@ -248,16 +253,17 @@ fn get_windows_network_bytes() -> Option<(u64, u64)> {
                 let app_ip = app_stats.clone();
                 let vpn_state_ip = vpn_state_arc.clone();
                 let is_running_ip = is_running_stats.clone();
+                let session_ip = session_stats.clone();
                 tokio::spawn(async move {
                     let intervals = [2500, 3000, 4000, 6000, 10000];
                     let mut current_ip = String::new();
 
                     for delay_ms in intervals {
-                        if !is_running_ip.load(Ordering::SeqCst) {
+                        if !is_running_ip.load(Ordering::SeqCst) || session_ip.load(Ordering::SeqCst) != session {
                             return;
                         }
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        if !is_running_ip.load(Ordering::SeqCst) {
+                        if !is_running_ip.load(Ordering::SeqCst) || session_ip.load(Ordering::SeqCst) != session {
                             return;
                         }
 
@@ -282,7 +288,7 @@ fn get_windows_network_bytes() -> Option<(u64, u64)> {
                             if ip != current_ip {
                                 current_ip = ip.clone();
                                 let mut s = vpn_state_ip.lock().await;
-                                if s.status == "connected" {
+                                if s.status == "connected" && session_ip.load(Ordering::SeqCst) == session {
                                     s.stats.public_ip = ip;
                                     s.stats.country_name = Some(country);
                                     s.stats.country_code = Some(code);
@@ -293,9 +299,9 @@ fn get_windows_network_bytes() -> Option<(u64, u64)> {
                     }
                 });
 
-                while is_running_stats.load(Ordering::SeqCst) {
+                while is_running_stats.load(Ordering::SeqCst) && session_stats.load(Ordering::SeqCst) == session {
                     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                    if !is_running_stats.load(Ordering::SeqCst) {
+                    if !is_running_stats.load(Ordering::SeqCst) || session_stats.load(Ordering::SeqCst) != session {
                         break;
                     }
 
@@ -319,7 +325,7 @@ fn get_windows_network_bytes() -> Option<(u64, u64)> {
                     }).await.ok().flatten();
 
                     let mut s = vpn_state_arc.lock().await;
-                    if s.status != "connected" {
+                    if s.status != "connected" || session_stats.load(Ordering::SeqCst) != session {
                         break;
                     }
 
@@ -398,6 +404,7 @@ pub async fn vpn_disconnect(app: AppHandle, state: State<'_, AppState>) -> Resul
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
 
+    state.session.fetch_add(1, Ordering::SeqCst);
     state.is_running.store(false, Ordering::SeqCst);
     s.status = "disconnected".into();
     s.profile = None;

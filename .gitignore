@@ -24,6 +24,7 @@ app/
 .gradle/
 build/
 scratch/
+SecureVPN-Updates-*/
 **/*.private.*
 SecureVPN-Portable/
 windows-app-backup-*/

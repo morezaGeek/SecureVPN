@@ -5,6 +5,16 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import type { ElectronAPI } from '../types/electron'
 
+function subscription<T>(event: string, callback: (payload: T) => void): () => void {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    void listen<T>(event, value => { if (!disposed) callback(value.payload) }).then(stop => {
+        if (disposed) stop()
+        else unlisten = stop
+    })
+    return () => { disposed = true; unlisten?.() }
+}
+
 export function setupTauriBridge() {
     const appWindow = getCurrentWindow()
 
@@ -120,7 +130,7 @@ export function setupTauriBridge() {
             }
         },
         onVpnStateChanged: (callback: (state: any) => void) => {
-            listen('vpn:stateChanged', (event: any) => callback(event.payload))
+            return subscription('vpn:stateChanged', callback)
         },
         onVpnLog: (callback: (log: any) => void) => {
             listen('vpn:log', (event: any) => callback(event.payload))

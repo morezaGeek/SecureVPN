@@ -4,7 +4,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use regex::Regex;
 use serde_json::Value;
@@ -350,6 +350,8 @@ pub async fn spawn_openconnect(
     cached_fingerprint: Option<String>,
     is_running: Arc<AtomicBool>,
     vpn_state_arc: Arc<Mutex<VpnState>>,
+    session_id: Arc<AtomicU64>,
+    session: u64,
 ) -> Result<u32, String> {
     let server_address = profile.get("serverAddress").and_then(|v| v.as_str()).unwrap_or("");
     let port = profile.get("port").and_then(|v| v.as_u64()).unwrap_or(443);
@@ -644,8 +646,11 @@ pub async fn spawn_openconnect(
 
     tokio::spawn(async move {
         let status = child.wait().await;
+        let mut state = vpn_state_arc.lock().await;
+        if session_id.load(Ordering::SeqCst) != session { return; }
         is_running_clone.store(false, Ordering::SeqCst);
         cleanup_openconnect_routes(Some(&server_ip_for_exit), Some("SecureVPN"));
+        *state = VpnState::default();
         let _ = app_clone3.emit("vpn:stateChanged", VpnState {
             status: "disconnected".into(),
             profile: None,

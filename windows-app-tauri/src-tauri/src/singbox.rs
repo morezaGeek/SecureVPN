@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use serde_json::{json, Value};
@@ -147,12 +147,19 @@ async fn build_outbound(profile: &Value, tag: &str, resolve_server: bool) -> Res
                 "password": uuid
             });
             if let Some(obfs) = singbox_cfg.get("hysteriaObfs").and_then(|v| v.as_str()) {
-                if obfs == "salamander" {
+                if obfs == "salamander" || obfs == "gecko" {
                     let obfs_pw = singbox_cfg.get("hysteriaObfsPassword").and_then(|v| v.as_str()).unwrap_or("");
                     o["obfs"] = json!({
-                        "type": "salamander",
+                        "type": obfs,
                         "password": obfs_pw
                     });
+                    if obfs == "gecko" {
+                        let min = singbox_cfg.get("hysteriaObfsMinPacketSize").and_then(Value::as_u64).unwrap_or(512);
+                        let max = singbox_cfg.get("hysteriaObfsMaxPacketSize").and_then(Value::as_u64).unwrap_or(1200);
+                        if min == 0 || min > max || max > 65535 { return Err("Invalid Gecko packet size range".into()); }
+                        o["obfs"]["min_packet_size"] = json!(min);
+                        o["obfs"]["max_packet_size"] = json!(max);
+                    }
                 }
             }
             o
@@ -223,6 +230,9 @@ async fn build_outbound(profile: &Value, tag: &str, resolve_server: bool) -> Res
         }
 
         if security == "tls" {
+            if let Some((name, _)) = ech_resolver(&singbox_cfg)? {
+                tls_obj["ech"] = json!({ "enabled": true, "query_server_name": name });
+            }
             let custom_alpn: Option<Vec<String>> = singbox_cfg.get("alpn")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|x| {
@@ -271,8 +281,8 @@ async fn build_outbound(profile: &Value, tag: &str, resolve_server: bool) -> Res
             .filter(|s| !s.is_empty())
             .unwrap_or("/");
 
-        let unescaped = unescape_percent_encoding(raw_path);
-        let mut final_path = if unescaped.starts_with('/') { unescaped } else { format!("/{}", unescaped) };
+        // URLSearchParams has already decoded the share-link parameter once.
+        let mut final_path = if raw_path.starts_with('/') { raw_path.to_owned() } else { format!("/{}", raw_path) };
 
         let mut max_early_data: Option<u32> = None;
         let mut early_data_header_name: Option<String> = None;
@@ -377,6 +387,48 @@ async fn build_outbound(profile: &Value, tag: &str, resolve_server: bool) -> Res
     Ok((raw_server_address.to_string(), server_ip, outbound))
 }
 
+// Fetch ECH keys on the physical connection. Resolving them through the proxy
+// would require the very TLS handshake whose keys we are trying to obtain.
+fn ech_resolver(cfg: &Value) -> Result<Option<(String, Value)>, String> {
+    let raw = cfg.get("ech").and_then(Value::as_str).unwrap_or("").trim();
+    if raw.is_empty() { return Ok(None); }
+    let (name, resolver) = raw.split_once('+').unwrap_or((raw, "udp://1.1.1.1"));
+    if name.is_empty() || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-') {
+        return Err("Invalid ECH query domain".into());
+    }
+    let url = reqwest::Url::parse(resolver).map_err(|_| "Invalid ECH DNS resolver")?;
+    let host = url.host_str().ok_or("ECH DNS resolver has no host")?;
+    // New-style DNS transports already dial directly when detour is omitted.
+    let mut server = json!({ "type": url.scheme(), "server": host });
+    match url.scheme() {
+        "udp" | "tcp" => { server["server_port"] = json!(url.port().unwrap_or(53)); }
+        "https" => {
+            server["server_port"] = json!(url.port().unwrap_or(443));
+            server["path"] = json!(if url.path() == "/" || url.path().is_empty() { "/dns-query" } else { url.path() });
+        }
+        _ => return Err("ECH DNS supports udp, tcp or https resolvers".into())
+    }
+    if host.parse::<std::net::IpAddr>().is_err() { server["domain_resolver"] = json!("direct-dns"); }
+    Ok(Some((name.to_owned(), server)))
+}
+
+fn configure_ech_dns(config: &mut Value, profiles: &[Value]) -> Result<(), String> {
+    let mut rules = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for profile in profiles {
+        if let Some((name, mut server)) = ech_resolver(&profile["singboxConfig"])? {
+            if !seen.insert(name.clone()) { continue; }
+            let tag = format!("ech-dns-{}", seen.len());
+            server["tag"] = json!(tag);
+            config["dns"]["servers"].as_array_mut().unwrap().push(server);
+            rules.push(json!({ "domain": [name], "server": tag }));
+        }
+    }
+    if let Some(existing) = config["dns"]["rules"].as_array() { rules.extend(existing.iter().cloned()); }
+    config["dns"]["rules"] = json!(rules);
+    Ok(())
+}
+
 pub async fn build_singbox_batch_test_config(
     profiles: &[Value],
     config_path: &Path,
@@ -427,7 +479,7 @@ pub async fn build_singbox_batch_test_config(
 
     outbounds.push(json!({ "type": "direct", "tag": "direct" }));
 
-    let full_config = json!({
+    let mut full_config = json!({
         "log": {
             "level": "warn",
             "timestamp": true
@@ -452,6 +504,7 @@ pub async fn build_singbox_batch_test_config(
         }
     });
 
+    configure_ech_dns(&mut full_config, profiles)?;
     let config_str = serde_json::to_string_pretty(&full_config).map_err(|e| e.to_string())?;
     std::fs::write(config_path, config_str).map_err(|e| e.to_string())?;
     Ok(port_map)
@@ -462,7 +515,7 @@ pub async fn build_singbox_test_config(profile: &Value, config_path: &Path) -> R
     let (raw_server_address, server_ip, outbound) = build_singbox_outbound(profile).await?;
 
     let rules = server_direct_rules(&raw_server_address, &server_ip);
-    let full_config = json!({
+    let mut full_config = json!({
         "log": {
             "level": "error",
             "timestamp": true
@@ -487,6 +540,7 @@ pub async fn build_singbox_test_config(profile: &Value, config_path: &Path) -> R
         }
     });
 
+    configure_ech_dns(&mut full_config, std::slice::from_ref(profile))?;
     let config_str = serde_json::to_string_pretty(&full_config).map_err(|e| e.to_string())?;
     std::fs::write(config_path, config_str).map_err(|e| e.to_string())?;
     Ok(())
@@ -675,7 +729,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
     route_rules.push(json!({ "ip_cidr": ["198.18.0.0/15"], "outbound": "proxy" }));
 
     // Build complete config conforming strictly to sing-box 1.12 - 1.14+ specifications
-    let full_config = json!({
+    let mut full_config = json!({
         "log": {
             "level": "error",
             "timestamp": true
@@ -745,6 +799,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         }
     });
 
+    configure_ech_dns(&mut full_config, std::slice::from_ref(profile))?;
     let config_str = serde_json::to_string_pretty(&full_config).map_err(|e| e.to_string())?;
     std::fs::write(config_path, config_str).map_err(|e| e.to_string())?;
     Ok(())
@@ -775,6 +830,9 @@ pub async fn spawn_singbox(
     bin_path: PathBuf,
     config_path: PathBuf,
     is_running: Arc<AtomicBool>,
+    vpn_state: Arc<tokio::sync::Mutex<VpnState>>,
+    session_id: Arc<AtomicU64>,
+    session: u64,
 ) -> Result<u32, String> {
     let check = Command::new(&bin_path)
         .args(["check", "-c"]).arg(&config_path)
@@ -847,8 +905,11 @@ pub async fn spawn_singbox(
     let app_clone3 = app.clone();
     tokio::spawn(async move {
         let status = child.wait().await;
+        let mut state = vpn_state.lock().await;
+        if session_id.load(Ordering::SeqCst) != session { return; }
         is_running_clone.store(false, Ordering::SeqCst);
         crate::commands::clear_app_system_proxy();
+        *state = VpnState::default();
         let _ = app_clone3.emit("vpn:stateChanged", VpnState {
             status: "disconnected".into(),
             profile: None,
@@ -887,6 +948,32 @@ mod tests {
     fn fatal_connection_errors_are_not_hidden_by_noise_filter() {
         assert!(!is_noisy_singbox_log("FATAL initialize router: context deadline exceeded"));
         assert!(is_noisy_singbox_log("connection download: context canceled"));
+    }
+
+    #[tokio::test]
+    async fn ech_bootstraps_directly_before_proxy_dns_and_gecko_sizes_survive() {
+        let mut profile = json!({"protocol":"vless","serverAddress":"192.0.2.1","port":443,
+            "singboxConfig":{"uuid":"00000000-0000-4000-8000-000000000001","transport":"xhttp",
+                "security":"tls","mode":"packet-up","ech":"cloudflare-ech.com+udp://1.1.1.1"}});
+        let (_, _, outbound) = build_singbox_outbound(&profile).await.unwrap();
+        assert_eq!(outbound["tls"]["ech"]["query_server_name"], "cloudflare-ech.com");
+        let mut config = json!({"dns":{"servers":[],"rules":[{"query_type":["A"],"server":"fakeip"}]}});
+        configure_ech_dns(&mut config, &[profile.clone(), profile.clone()]).unwrap();
+        assert_eq!(config["dns"]["servers"].as_array().unwrap().len(), 1);
+        assert!(config["dns"]["servers"][0].get("detour").is_none());
+        assert_eq!(config["dns"]["servers"][0]["server"], "1.1.1.1");
+        assert_eq!(config["dns"]["rules"][0]["domain"], json!(["cloudflare-ech.com"]));
+        assert_eq!(config["dns"]["rules"][1]["server"], "fakeip");
+        assert!(ech_resolver(&json!({"ech":"example.com+file:///tmp/key"})).is_err());
+        profile["protocol"] = json!("hysteria2");
+        profile["singboxConfig"] = json!({"uuid":"test","security":"tls","hysteriaObfs":"gecko",
+            "hysteriaObfsPassword":"test","hysteriaObfsMinPacketSize":600,"hysteriaObfsMaxPacketSize":1300});
+        let (_, _, outbound) = build_singbox_outbound(&profile).await.unwrap();
+        assert_eq!(outbound["obfs"]["type"], "gecko");
+        assert_eq!(outbound["obfs"]["min_packet_size"], 600);
+        assert_eq!(outbound["obfs"]["max_packet_size"], 1300);
+        profile["singboxConfig"]["hysteriaObfsMinPacketSize"] = json!(1400);
+        assert!(build_singbox_outbound(&profile).await.is_err());
     }
 
     #[tokio::test]

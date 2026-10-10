@@ -63,10 +63,11 @@ export function parseVlessLink(link: string): ParsedLink | null {
             encryption: params.get('encryption') || 'none',
             transport,
             security,
+            ech: params.get('ech') || undefined,
             sni: params.get('sni') || undefined,
             fingerprint: params.get('fp') || 'chrome',
             alpn: params.get('alpn')?.split(',') || undefined,
-            path: params.get('path') ? decodeURIComponent(params.get('path')!) : undefined,
+            path: params.get('path') || undefined,
             host: params.get('host') || params.get('sni') || undefined,
             serviceName: params.get('serviceName') || undefined,
             mode,
@@ -161,10 +162,11 @@ export function parseTrojanLink(link: string): ParsedLink | null {
             port,
             transport,
             security,
+            ech: params.get('ech') || undefined,
             sni: params.get('sni') || undefined,
             fingerprint: params.get('fp') || 'chrome',
             alpn: params.get('alpn')?.split(',') || undefined,
-            path: params.get('path') ? decodeURIComponent(params.get('path')!) : undefined,
+            path: params.get('path') || undefined,
             host: params.get('host') || params.get('sni') || undefined
         }
 
@@ -248,6 +250,7 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
             const params = new URLSearchParams()
             params.set('type', config.transport)
             params.set('security', config.security)
+            if (config.ech) params.set('ech', config.ech)
             if (config.sni) params.set('sni', config.sni)
             if (config.fingerprint) params.set('fp', config.fingerprint)
             if (config.alpn) params.set('alpn', config.alpn.join(','))
@@ -285,12 +288,27 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
             const params = new URLSearchParams()
             params.set('type', config.transport)
             params.set('security', config.security)
+            if (config.ech) params.set('ech', config.ech)
             if (config.sni) params.set('sni', config.sni)
             if (config.fingerprint) params.set('fp', config.fingerprint)
             if (config.alpn) params.set('alpn', config.alpn.join(','))
             if (config.path) params.set('path', config.path)
 
             return `trojan://${encodeURIComponent(config.uuid)}@${config.address}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
+        }
+
+        case 'hysteria2': {
+            const params = new URLSearchParams()
+            if (config.sni) params.set('sni', config.sni)
+            if (config.alpn?.length) params.set('alpn', config.alpn.join(','))
+            if (config.allowInsecure) params.set('insecure', '1')
+            if (config.hysteriaObfs) params.set('obfs', config.hysteriaObfs)
+            if (config.hysteriaObfsPassword) params.set('obfs-password', config.hysteriaObfsPassword)
+            if (config.hysteriaObfs === 'gecko') {
+                params.set('minPacketSize', String(config.hysteriaObfsMinPacketSize || 512))
+                params.set('maxPacketSize', String(config.hysteriaObfsMaxPacketSize || 1200))
+            }
+            return `hysteria2://${encodeURIComponent(config.uuid)}@${config.address}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
         }
 
         case 'shadowsocks': {
@@ -309,7 +327,7 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
 function parseHysteria2Link(link: string): ParsedLink | null {
     try {
         const uri = new URL(link.replace('hysteria2://', 'http://'))
-        const password = uri.username || uri.password
+        const password = decodeURIComponent(uri.username || uri.password)
         const address = uri.hostname
         const port = parseInt(uri.port || '443', 10)
         let name = decodeURIComponent(uri.hash.substring(1) || `Hysteria2-${address}`)
@@ -332,9 +350,11 @@ function parseHysteria2Link(link: string): ParsedLink | null {
                 sni,
                 fingerprint: fp,
                 alpn: alpn ? alpn.split(',') : undefined,
-                allowInsecure: true,
+                allowInsecure: uri.searchParams.get('insecure') === '1' || uri.searchParams.get('allowInsecure') === '1',
                 hysteriaObfs: obfs,
-                hysteriaObfsPassword: obfsPassword
+                hysteriaObfsPassword: obfsPassword,
+                hysteriaObfsMinPacketSize: Number(uri.searchParams.get("minPacketSize")) || 512,
+                hysteriaObfsMaxPacketSize: Number(uri.searchParams.get("maxPacketSize")) || 1200
             }
         }
     } catch (e) {
@@ -351,7 +371,9 @@ export function parseSubscriptionData(content: string, headers: Record<string, s
     
     // Parse content (usually base64 encoded)
     try {
-        const decoded = atob(content.trim())
+        const raw = content.trim()
+        const decoded = /^(vless|vmess|trojan|ss|hysteria2):\/\//.test(raw) ? raw :
+            new TextDecoder().decode(Uint8Array.from(atob(raw.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)))
         const lines = decoded.split('\n').filter(line => line.trim().length > 0)
         
         for (const line of lines) {

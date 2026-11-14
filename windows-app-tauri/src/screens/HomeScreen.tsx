@@ -161,7 +161,7 @@ export default function HomeScreen() {
     }
 
     return (
-        <div>
+        <div className="home-screen">
             {/* Profile Selector - Shown when disconnected or error */}
             {profiles.length > 0 && (connectionState === 'disconnected' || connectionState === 'error') && (
                 <div className="profile-selector-container">

@@ -14,7 +14,6 @@
     --ping-green: #62dc86;
     --ping-yellow: #ffd54f;
     --ping-red: #ff6b6b;
-    --config-font: "Cascadia Mono", "Consolas", ui-monospace, monospace;
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -114,7 +113,7 @@
     color: var(--config-text);
     border: 1px solid var(--config-line);
     border-radius: 0;
-    font: 12px/1.4 var(--config-font);
+    font: 12px/1.4 var(--font-mono);
 }
 
 .config-card:hover { border-color: var(--config-muted); }
@@ -212,7 +211,7 @@
 
 .profile-action-target { flex: 1 1 120px; min-width: 0; }
 .profile-action-caption { font-size: 11px; color: var(--config-muted); }
-.profile-action-name { font: 700 13px/1.4 var(--config-font); }
+.profile-action-name { font: 700 13px/1.4 var(--font-mono); }
 .profile-action-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .profile-action-button {
     display: inline-flex;

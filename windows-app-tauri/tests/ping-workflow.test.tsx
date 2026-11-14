@@ -9,6 +9,7 @@ import { ThemeProvider } from '../src/context/ThemeContext'
 import { UpdateProvider } from '../src/context/UpdateContext'
 import UpdateButton from '../src/components/UpdateButton'
 import { parseShareLink, parseSubscriptionData, generateShareLink } from '../src/utils/linkParser'
+import { pingTone, sortProfilesByPing } from '../src/utils/profilePresentation'
 const storage = new Map<string,string>()
 Object.assign(globalThis, {
  localStorage: {getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>storage.set(k,v),removeItem:(k:string)=>storage.delete(k)},
@@ -30,7 +31,7 @@ const api={onVpnStateChanged:(fn:any)=>{vpnListener=fn;return ()=>{if(vpnListene
 ;(window as any).electronAPI=api
 const flush=async(fn?:()=>any)=>{await act(async()=>{await fn?.();await Promise.resolve()})}
 function text(node:any):string {return Array.isArray(node)?node.map(text).join(''):typeof node==='object'&&node?text(node.children):String(node??'')}
-function button(tree:any,label:string) {return tree.root.findAllByType('button').find((b:any)=>text(b.children)===label)!}
+function button(tree:any,label:string) {return tree.root.findAllByType('button').find((b:any)=>text(b.children).trim()===label)!}
 function chip(tree:any,label:string) {return tree.root.findAllByType('div').find((b:any)=>b.props.className?.includes('profile-card') && text(b.children).trim()===label)!}
 async function run(){
  const echLink='vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls&type=xhttp&mode=packet-up&ech=cloudflare-ech.com%2Budp%3A%2F%2F1.1.1.1&path=%2Ftest%252Fkeep#Finland';
@@ -40,16 +41,59 @@ async function run(){
  const gecko=parseShareLink('hysteria2://p%3A%40ss@example.com:443?obfs=gecko&obfs-password=test&minPacketSize=600&maxPacketSize=1300#Test')!;
  assert.equal(gecko.config.uuid,'p:@ss');assert.equal(gecko.config.hysteriaObfsMinPacketSize,600);
  assert.deepEqual(parseShareLink(generateShareLink('hysteria2',gecko.name,gecko.config)),gecko);
+ const unicodeName = 'سرور آزمایشی 🇩🇪';
+ const vmess = generateShareLink('vmess', unicodeName, { uuid: 'synthetic-id', address: 'example.com', port: 443, transport: 'tcp', security: 'tls' });
+ assert.equal(parseShareLink(vmess)?.name, unicodeName);
+ const thresholds = [undefined, -1, 0, 99, 100, 160, 161, 270, 271];
+ assert.deepEqual(thresholds.map(pingTone), ['untested', 'red', 'blue', 'blue', 'green', 'green', 'yellow', 'yellow', 'red']);
+ const ranked = [
+  { ...fixtures[0], id:'untested', ping:undefined }, { ...fixtures[0], id:'slow', ping:400 },
+  { ...fixtures[0], id:'timeout', ping:-1 }, { ...fixtures[0], id:'fast', ping:20 },
+  { ...fixtures[0], id:'fast-tie', ping:20 }, { ...fixtures[0], id:'invalid', ping:NaN }
+ ] as Parameters<typeof sortProfilesByPing>[0];
+ assert.deepEqual(sortProfilesByPing(ranked).map(p=>p.id), ['fast', 'fast-tie', 'slow', 'untested', 'timeout', 'invalid']);
+ assert.equal(ranked[0].id, 'untested', 'Sorting cannot change the stored order');
  let app:any;await flush(()=>{app=create(<App/>)});
  assert.ok(chip(app,'GozarVPN').props.className.includes('selected'))
  await act(()=>{button(app,'Test all').props.onClick()}); assert.deepEqual(calls[0].ids,['gozar-1','gozar-2'])
  await flush(()=>button(app,'Stop').props.onClick());
  await flush(()=>{pingListener({profileId:'gozar-1',latency:999,mode:'real',requestId:calls[0].requestId});pending.shift()!({'gozar-1':999})});
  assert.ok(!text(app.toJSON()).includes('999ms'))
+ const sort = () => app.root.findAllByType('select').find((s:any)=>s.props.value === 'default' || s.props.value === 'ping');
+ const order = () => app.root.findAllByType('button')
+  .filter((r:any)=>r.props.className === 'config-card-select').map((r:any)=>r.props['aria-label']);
+ assert.deepEqual(order(), ['Select gozar-1','Select gozar-2']);
+ const storedOrder=JSON.stringify(JSON.parse(storage.get('vpn-profiles')!).map((p:any)=>p.id));
+ await flush(()=>sort().props.onChange({target:{value:'ping'}}));
+ assert.equal(storage.get('vpn-profile-sort'),'ping');
+ const target=()=>app.root.findByProps({'aria-label':'Select gozar-2'});
+ const actionBar=()=>app.root.findAllByProps({'aria-label':'Profile actions'});
+ assert.equal(actionBar().length,0);
+ const trigger={ scrollIntoView(){}, focus(){} };
+ await flush(()=>target().props.onKeyDown({key:'F10',shiftKey:true,preventDefault(){},currentTarget:trigger}));
+ assert.ok(text(actionBar()[0].children).includes('gozar-2'));
+ assert.equal(storage.get('vpn-selected-profile'),undefined,'Actions must not select a connection');
+ await flush(()=>button(app,'Edit').props.onClick());
+ assert.ok(text(app.toJSON()).includes('Edit Profile'));
+ assert.ok(app.root.findAllByType('input').some((i:any)=>i.props.value==='gozar-2'));
+ await flush(()=>button(app,'Cancel').props.onClick());
+ await flush(()=>target().props.onContextMenu({button:2,preventDefault(){},currentTarget:trigger}));
+ let confirmed='';
+ Object.assign(globalThis,{confirm:(message:string)=>{confirmed=message;return false}});
+ await flush(()=>button(app,'Delete').props.onClick());
+ assert.ok(confirmed.includes('gozar-2'));
+ assert.deepEqual(order(), ['Select gozar-1','Select gozar-2']);
+ await flush(()=>chip(app,'Sale').props.onClick());
+ assert.deepEqual(order(), ['Select sale-1']);
+ assert.equal(actionBar().length,0);
+ await flush(()=>chip(app,'GozarVPN').props.onClick());
+ assert.equal(JSON.stringify(JSON.parse(storage.get('vpn-profiles')!).map((p:any)=>p.id)),storedOrder);
  await flush(()=>button(app,'Connection').props.onClick());await flush(()=>button(app,'Profiles').props.onClick());
+ assert.equal(sort().props.value,'ping','Sort survives leaving the profiles tab');
  assert.ok(chip(app,'GozarVPN').props.className.includes('selected'))
  await flush(()=>app.unmount());await flush(()=>{app=create(<App/>)});
  assert.ok(button(app,'Profiles').props.className.includes('active'));assert.ok(chip(app,'GozarVPN').props.className.includes('selected'));
+ assert.equal(sort().props.value,'ping','Sort is restored on restart');
  await flush(()=>app.unmount());
  function Capture(){context=useVpn();return null}
  let tree:any;await flush(()=>{tree=create(<VpnProvider><Capture/><HomeScreen/></VpnProvider>)});

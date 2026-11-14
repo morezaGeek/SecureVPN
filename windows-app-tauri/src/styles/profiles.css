@@ -1,0 +1,229 @@
+.main-content.profiles-content {
+    padding: 0;
+    overflow: hidden;
+}
+
+.profiles-screen {
+    --config-bg: #000;
+    --config-text: #fff;
+    --config-muted: #b7b7b7;
+    --config-line: #373737;
+    --config-hover: #181818;
+    --config-focus: #64b5ff;
+    --ping-blue: #64b5ff;
+    --ping-green: #62dc86;
+    --ping-yellow: #ffd54f;
+    --ping-red: #ff6b6b;
+    --config-font: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+[data-theme="light"] .profiles-screen {
+    --config-bg: #fff;
+    --config-text: #000;
+    --config-muted: #505050;
+    --config-line: #bdbdbd;
+    --config-hover: #ededed;
+    --config-focus: #0056b3;
+    --ping-blue: #0056b3;
+    --ping-green: #17672d;
+    --ping-yellow: #735700;
+    --ping-red: #b3261e;
+}
+
+.profiles-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--spacing-lg) var(--spacing-xl);
+}
+
+.profiles-header, .profiles-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.profiles-server-header { margin-top: var(--spacing-lg); }
+
+.profiles-controls {
+    display: flex;
+    align-items: center;
+}
+
+.profiles-controls .title-bar-button {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    width: 32px;
+    height: 32px;
+}
+
+.profiles-controls .ping-mode-group {
+    border-color: var(--border-color);
+}
+
+.profiles-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.profiles-sort select {
+    min-height: 32px;
+    padding: 4px 6px;
+    background: var(--config-bg);
+    color: var(--config-text);
+    border: 1px solid var(--config-line);
+    border-radius: var(--border-radius-sm);
+    font: inherit;
+    color-scheme: dark;
+}
+
+[data-theme="light"] .profiles-sort select { color-scheme: light; }
+
+.profile-subscriptions {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+}
+
+.profiles-hint {
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.config-list {
+    list-style: none;
+    display: grid;
+    gap: 6px;
+}
+
+.config-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    padding-inline-end: 8px;
+    background: var(--config-bg);
+    color: var(--config-text);
+    border: 1px solid var(--config-line);
+    border-radius: 0;
+    font: 12px/1.4 var(--config-font);
+}
+
+.config-card:hover { border-color: var(--config-muted); }
+.config-card.selected { border-color: var(--config-focus); }
+.config-card.action-target {
+    border-color: var(--config-text);
+    box-shadow: inset 0 0 0 1px var(--config-text);
+}
+
+.config-card-select,
+.config-card-ping,
+.profile-action-button {
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    border: 0;
+    cursor: pointer;
+}
+
+.config-card-select {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    min-height: 52px;
+    padding: 7px 10px;
+    text-align: start;
+    touch-action: pan-y;
+    user-select: none;
+}
+
+.config-card-name-row, .config-card-details {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+}
+
+.config-card-name, .config-card-endpoint, .config-card-protocol, .profile-action-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.config-card-name { font-size: 14px; font-weight: 700; }
+.config-card-endpoint { min-width: 0; }
+.config-card-protocol { max-width: 45%; color: var(--config-muted); font-size: 11px; }
+.config-card-flag, .config-card-check { display: flex; flex-shrink: 0; }
+.config-card-check { color: var(--config-focus); }
+.config-card .subscription-badge { max-width: min(30%, 180px); border-radius: 0; padding: 0 5px; }
+
+.config-card-ping {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 32px;
+    min-width: 70px;
+    padding: 3px 6px;
+    margin-top: 5px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.config-card-ping:hover:not(:disabled),
+.profile-action-button:hover { background: var(--config-hover); }
+.config-card-ping:disabled { cursor: default; }
+.config-card-ping.ping-blue { color: var(--ping-blue); }
+.config-card-ping.ping-green { color: var(--ping-green); }
+.config-card-ping.ping-yellow { color: var(--ping-yellow); }
+.config-card-ping.ping-red { color: var(--ping-red); }
+.config-card-ping.ping-untested { color: var(--config-muted); }
+
+.config-card-select:focus-visible,
+.config-card-ping:focus-visible,
+.profiles-controls :is(button, select):focus-visible,
+.profile-action-button:focus-visible {
+    outline: 2px solid var(--config-focus);
+    outline-offset: -2px;
+}
+
+.profile-action-bar {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    padding: 9px var(--spacing-xl);
+    border-top: 1px solid var(--config-line);
+    background: var(--config-bg);
+    color: var(--config-text);
+}
+
+.profile-action-target { flex: 1 1 120px; min-width: 0; }
+.profile-action-caption { font-size: 11px; color: var(--config-muted); }
+.profile-action-name { font: 700 13px/1.4 var(--config-font); }
+.profile-action-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.profile-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 4px 10px;
+    border: 1px solid var(--config-line);
+    font-size: 12px;
+}
+.profile-action-button.danger { color: var(--ping-red); }
+.profile-action-button.close { color: var(--config-muted); padding-inline: 7px; }
+.profile-action-status { flex-basis: 100%; font-size: 12px; color: var(--config-muted); }

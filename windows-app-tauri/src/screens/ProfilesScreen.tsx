@@ -1,34 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useVpn } from '../context/VpnContext'
 import { VpnProfile, VpnProtocol, AuthType, PROTOCOL_INFO, createDefaultProfile, SingboxTransport, SingboxSecurity } from '../types'
-import { Plus, Globe, Edit2, Trash2, X, Check, Download, Upload, Clipboard, RefreshCw, Link as LinkIcon, Database, Activity, Play, RotateCcw } from 'lucide-react'
-import { parseShareLink } from '../utils/linkParser'
-import { orderProfilesBySubscription } from '../utils/profilePresentation'
-import SubscriptionBadge from '../components/SubscriptionBadge'
-
-// Convert 2-letter country code to flag CDN url
-function countryCodeToFlagUrl(code: string): string {
-    if (!code || code.length !== 2) return ''
-    return `https://flagcdn.com/24x18/${code.toLowerCase()}.png`
-}
-
-// Extract country code from profile name (e.g. "DE Germany | MR" → "DE", "🇺🇸 United-States" → "US")
-function extractCountryCode(name: string): string {
-    const match = name.match(/^([A-Z]{2})\s/)
-    if (match) return match[1]
-    
-    // Try to extract from emoji
-    const flagMatch = name.match(/^[\u{1F1E6}-\u{1F1FF}]{2}/u)
-    if (flagMatch) {
-        const chars = [...flagMatch[0]]
-        if (chars.length >= 2) {
-            const c1 = (chars[0].codePointAt(0) || 0) - 0x1F1E6 + 65
-            const c2 = (chars[1].codePointAt(0) || 0) - 0x1F1E6 + 65
-            return String.fromCharCode(c1, c2)
-        }
-    }
-    return ''
-}
+import { Plus, Globe, Edit2, Trash2, X, Check, Download, Upload, Clipboard, RefreshCw, Link as LinkIcon, Database, Play, RotateCcw, Share2, ArrowDownWideNarrow } from 'lucide-react'
+import { parseShareLink, generateShareLink } from '../utils/linkParser'
+import { orderProfilesBySubscription, sortProfilesByPing, type ProfileSort } from '../utils/profilePresentation'
+import ProfileListCard from '../components/ProfileListCard'
 
 export default function ProfilesScreen() {
     const { 
@@ -80,6 +56,54 @@ export default function ProfilesScreen() {
         else localStorage.removeItem('vpn-selected-subscription')
     }, [selectedSubId])
     const [editingSub, setEditingSub] = useState<boolean>(false)
+    const [profileSort, setProfileSort] = useState<ProfileSort>(() =>
+        localStorage.getItem('vpn-profile-sort') === 'ping' ? 'ping' : 'default')
+    const [actionTarget, setActionTarget] = useState<{ id: string; keyboard: boolean } | null>(null)
+    const [shareStatus, setShareStatus] = useState<{ profileId: string; message: string } | null>(null)
+    const actionsTrigger = useRef<HTMLButtonElement | null>(null)
+    const editAction = useRef<HTMLButtonElement>(null)
+    const sortControl = useRef<HTMLSelectElement>(null)
+    const pingingIds = useMemo(() => new Set(testingProfileIds), [testingProfileIds])
+    const visibleProfiles = useMemo(() => selectedSubId
+        ? profiles.filter(p => p.subscriptionId === selectedSubId)
+        : orderProfilesBySubscription(profiles, subscriptions), [profiles, subscriptions, selectedSubId])
+    const displayedProfiles = useMemo(() => profileSort === 'ping' ? sortProfilesByPing(visibleProfiles)
+        : visibleProfiles, [profileSort, visibleProfiles])
+    const actionProfile = displayedProfiles.find(profile => profile.id === actionTarget?.id)
+
+    useEffect(() => {
+        localStorage.setItem('vpn-profile-sort', profileSort)
+    }, [profileSort])
+
+    useEffect(() => {
+        if (!actionTarget) return
+        if (!actionProfile) {
+            setActionTarget(null)
+            setShareStatus(null)
+            actionsTrigger.current = null
+            return
+        }
+        actionsTrigger.current?.scrollIntoView({ block: 'nearest' })
+        if (actionTarget.keyboard) editAction.current?.focus({ preventScroll: true })
+    }, [actionTarget, actionProfile?.id])
+
+    const closeActions = (restoreFocus = false) => {
+        setActionTarget(null)
+        setShareStatus(null)
+        if (restoreFocus) actionsTrigger.current?.focus({ preventScroll: true })
+        actionsTrigger.current = null
+    }
+
+    const showActions = (id: string, trigger: HTMLButtonElement, keyboard: boolean) => {
+        actionsTrigger.current = trigger
+        setShareStatus(null)
+        setActionTarget({ id, keyboard })
+    }
+
+    const chooseSubscription = (id: string | null) => {
+        closeActions()
+        setSelectedSubId(id)
+    }
 
     const openAddModal = () => {
         setEditingProfile(null)
@@ -106,10 +130,11 @@ export default function ProfilesScreen() {
         setIsModalOpen(false)
     }
 
-    const handleDelete = (e: React.MouseEvent, profileId: string) => {
-        e.stopPropagation()
-        if (confirm('Are you sure you want to delete this profile?')) {
-            deleteProfile(profileId)
+    const handleDelete = (profile: VpnProfile) => {
+        if (confirm(`Delete “${profile.name}”?`)) {
+            deleteProfile(profile.id)
+            closeActions()
+            sortControl.current?.focus({ preventScroll: true })
         }
     }
 
@@ -118,10 +143,10 @@ export default function ProfilesScreen() {
     }
 
     // Export profiles to JSON file
-    const handleExport = async () => {
+    const handleExport = async (items: VpnProfile[] = profiles) => {
         const api = window.electronAPI
         if (!api) return
-        if (profiles.length === 0) {
+        if (items.length === 0) {
             alert('No profiles to export')
             return
         }
@@ -138,7 +163,7 @@ export default function ProfilesScreen() {
                 const exportData = {
                     version: '1.0',
                     exportedAt: new Date().toISOString(),
-                    profiles: profiles.map(p => ({
+                    profiles: items.map(p => ({
                         ...p,
                         password: '' // Don't export passwords for security
                     }))
@@ -150,7 +175,7 @@ export default function ProfilesScreen() {
                 )
 
                 if (writeResult.success) {
-                    alert(`Exported ${profiles.length} profile(s) successfully!`)
+                    alert(`Exported ${items.length} profile(s) successfully!`)
                 } else {
                     alert('Failed to export: ' + writeResult.error)
                 }
@@ -158,6 +183,29 @@ export default function ProfilesScreen() {
         } catch (error) {
             console.error('Export error:', error)
             alert('Failed to export profiles')
+        }
+    }
+
+    const shareProfile = async (profile: VpnProfile) => {
+        let link = ''
+        if (profile.protocol !== 'openconnect' && profile.singboxConfig?.uuid) {
+            try {
+                link = generateShareLink(profile.protocol, profile.name, {
+                    ...profile.singboxConfig,
+                    address: profile.serverAddress,
+                    port: profile.port,
+                })
+            } catch { /* Profiles without a share link can still be exported. */ }
+        }
+        if (!link) {
+            await handleExport([profile])
+            return
+        }
+        try {
+            await navigator.clipboard.writeText(link)
+            setShareStatus({ profileId: profile.id, message: 'Link copied. It includes the profile credentials.' })
+        } catch {
+            setShareStatus({ profileId: profile.id, message: 'Could not copy the profile link. Try again.' })
         }
     }
 
@@ -275,11 +323,16 @@ export default function ProfilesScreen() {
     // Keyboard shortcuts: Ctrl+V (paste link) and Ctrl+R (test ping on selected profile)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (isModalOpen) return
+            if (isModalOpen || isSubModalOpen) return
+            if (e.key === 'Escape' && actionTarget) {
+                e.preventDefault()
+                closeActions(true)
+                return
+            }
 
             const activeElement = document.activeElement
             const isInputFocused = activeElement?.tagName === 'INPUT' ||
-                activeElement?.tagName === 'TEXTAREA' ||
+                activeElement?.tagName === 'TEXTAREA' || activeElement?.tagName === 'SELECT' ||
                 (activeElement as HTMLElement)?.isContentEditable
 
             if (isInputFocused) return
@@ -298,15 +351,14 @@ export default function ProfilesScreen() {
 
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [isModalOpen, currentProfile, profiles, pingMode, testSingleProfile])
-
-    const displayedProfiles = selectedSubId ? profiles.filter(p => p.subscriptionId === selectedSubId) : orderProfilesBySubscription(profiles, subscriptions)
+    }, [isModalOpen, isSubModalOpen, actionTarget, currentProfile, profiles, pingMode, testSingleProfile])
 
     return (
-        <div>
-            <div className="card-header">
+        <div className="profiles-screen">
+            <div className="profiles-scroll">
+            <div className="card-header profiles-header">
                 <h2 className="card-title">VPN Profiles</h2>
-                <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
+                <div className="profiles-controls">
                     <button className="btn btn-secondary" onClick={handleImportFromClipboard} title="Import from clipboard (V2Ray link)">
                         <Clipboard size={18} />
                         Paste Link
@@ -315,7 +367,7 @@ export default function ProfilesScreen() {
                         <Download size={18} />
                         Import
                     </button>
-                    <button className="btn btn-secondary" onClick={handleExport} title="Export profiles" disabled={profiles.length === 0}>
+                    <button className="btn btn-secondary" onClick={() => void handleExport()} title="Export profiles" disabled={profiles.length === 0}>
                         <Upload size={18} />
                         Export
                     </button>
@@ -338,10 +390,10 @@ export default function ProfilesScreen() {
             </div>
 
             {subscriptions.length > 0 && (
-                <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '8px', marginBottom: '8px' }}>
+                <div className="profile-subscriptions">
                     <div 
                         className={`profile-card ${selectedSubId === null ? 'selected' : ''}`} 
-                        onClick={() => setSelectedSubId(null)}
+                        onClick={() => chooseSubscription(null)}
                         style={{ padding: '8px 16px', cursor: 'pointer', borderRadius: '8px', flexShrink: 0, minHeight: 'auto' }}
                     >
                         <strong>All Profiles</strong>
@@ -350,7 +402,7 @@ export default function ProfilesScreen() {
                         <div 
                             key={sub.id} 
                             className={`profile-card ${selectedSubId === sub.id ? 'selected' : ''}`} 
-                            onClick={() => setSelectedSubId(sub.id)}
+                            onClick={() => chooseSubscription(sub.id)}
                             style={{ padding: '8px 16px', cursor: 'pointer', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, minHeight: 'auto' }}
                         >
                             <strong>{sub.name}</strong>
@@ -360,7 +412,7 @@ export default function ProfilesScreen() {
                             <button className="title-bar-button" onClick={(e) => { e.stopPropagation(); openEditSubModal(sub); }} title="Edit" style={{ padding: '2px' }}>
                                 <Edit2 size={14} />
                             </button>
-                            <button className="title-bar-button" onClick={(e) => { e.stopPropagation(); deleteSubscription(sub.id); if(selectedSubId === sub.id) setSelectedSubId(null); }} title="Delete" style={{ padding: '2px', color: 'var(--danger)' }}>
+                            <button className="title-bar-button" onClick={(e) => { e.stopPropagation(); deleteSubscription(sub.id); if(selectedSubId === sub.id) chooseSubscription(null); }} title="Delete" style={{ padding: '2px', color: 'var(--accent-red)' }}>
                                 <Trash2 size={14} />
                             </button>
                         </div>
@@ -408,18 +460,28 @@ export default function ProfilesScreen() {
                 </div>
             )}
 
-            <div className="card-header" style={{ marginTop: 'var(--spacing-lg)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="card-header profiles-header profiles-server-header">
                 <h3 className="card-title" style={{ fontSize: '1.1rem' }}>
                     Servers {displayedProfiles.length > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400 }}>({displayedProfiles.length})</span>}
                 </h3>
 
-                {displayedProfiles.length > 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="profiles-controls">
+                    <label className="profiles-sort">
+                        <ArrowDownWideNarrow size={14} aria-hidden="true" />
+                        <span>Sort by</span>
+                        <select ref={sortControl} value={profileSort} onChange={event =>
+                            setProfileSort(event.target.value === 'ping' ? 'ping' : 'default')}>
+                            <option value="default">Default</option>
+                            <option value="ping">Ping</option>
+                        </select>
+                    </label>
+                    {displayedProfiles.length > 0 && <>
                         {/* Segmented control: [Real delay] [TCP] */}
                         <div className="ping-mode-group">
                             <button 
                                 type="button" 
                                 className={`ping-mode-btn ${pingMode === 'real' ? 'active' : ''}`}
+                                aria-pressed={pingMode === 'real'}
                                 onClick={() => setPingMode('real')}
                                 title="Real delay through proxy tunnel via Google (V2rayN True Real Delay)"
                             >
@@ -428,6 +490,7 @@ export default function ProfilesScreen() {
                             <button 
                                 type="button" 
                                 className={`ping-mode-btn ${pingMode === 'tcp' ? 'active' : ''}`}
+                                aria-pressed={pingMode === 'tcp'}
                                 onClick={() => setPingMode('tcp')}
                                 title="Direct TCP latency to server relay"
                             >
@@ -452,17 +515,16 @@ export default function ProfilesScreen() {
                         </button>
 
                         {isTestingPings && <button className="btn btn-secondary" onClick={() => void cancelPings()}>Stop</button>}
-                        {/* Clear / Reset button */}
                         <button 
                             className="title-bar-button" 
-                            style={{ border: '1px solid var(--border)', borderRadius: '6px', padding: '5px', height: '30px', width: '30px' }}
                             onClick={clearPings} 
+                            aria-label="Clear ping results"
                             title="Clear all ping results"
                         >
                             <RotateCcw size={14} />
                         </button>
-                    </div>
-                )}
+                    </>}
+                </div>
             </div>
 
             {displayedProfiles.length === 0 ? (
@@ -478,108 +540,54 @@ export default function ProfilesScreen() {
                     </button>
                 </div>
             ) : (
-                <div className="profile-list">
-                    {displayedProfiles.map(profile => (
-                        <div
-                            key={profile.id}
-                            className={`profile-card ${currentProfile?.id === profile.id ? 'selected' : ''}`}
-                            onClick={() => selectProfile(profile)}
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                                if (e.key.toLowerCase() === 'r' && e.ctrlKey) {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    testSingleProfile(profile.id, pingMode);
-                                }
-                            }}
-                        >
-                            <div className="profile-icon">
-                                {(() => {
-                                    const cc = profile.countryCode || extractCountryCode(profile.name)
-                                    const flagUrl = countryCodeToFlagUrl(cc)
-                                    if (flagUrl) {
-                                        return <img src={flagUrl} alt={cc} style={{ width: '24px', borderRadius: '2px' }} />
-                                    }
-                                    return <Globe size={24} />
-                                })()}
-                            </div>
-                            <div className="profile-info">
-                                <div className="profile-name-row">
-                                    <div className="profile-name">{profile.name}</div>
-                                    <SubscriptionBadge profile={profile} subscriptions={subscriptions} />
-                                </div>
-                                <div className="profile-server">
-                                    {profile.serverAddress}:{profile.port}
-                                    {testingProfileIds?.includes(profile.id) ? (
-                                        <span style={{ 
-                                            marginLeft: '8px', 
-                                            fontSize: '0.85em', 
-                                            color: 'var(--warning)',
-                                            fontWeight: 500
-                                        }}>
-                                            Testing...
-                                        </span>
-                                    ) : profile.ping !== undefined ? (
-                                        <span 
-                                            onClick={(e) => { e.stopPropagation(); testSingleProfile(profile.id, pingMode) }}
-                                            style={{ 
-                                                marginLeft: '8px', 
-                                                fontSize: '0.85em', 
-                                                color: profile.ping > 0 ? (profile.ping < 200 ? 'var(--success)' : 'var(--warning)') : 'var(--danger)',
-                                                fontWeight: 500,
-                                                cursor: 'pointer'
-                                            }}
-                                            title={`${profile.pingMode === 'tcp' ? 'TCP handshake to server' : 'HTTP response through tunnel'} — click to retest (Ctrl+R)`}
-                                        >
-                                            {profile.ping > 0 ? `${profile.ping}ms` : 'Timeout'}
-                                        </span>
-                                    ) : null}
-                                </div>
-                            </div>
-                            <span className="profile-protocol">
-                                {(() => {
-                                    if (['vless', 'vmess', 'trojan', 'shadowsocks'].includes(profile.protocol) && profile.singboxConfig) {
-                                        const parts = [PROTOCOL_INFO[profile.protocol].displayName.toUpperCase()]
-                                        
-                                        let network = profile.singboxConfig.transport?.toUpperCase() || 'TCP'
-                                        
-                                        parts.push(network)
-                                        
-                                        if (profile.singboxConfig.security === 'reality' || profile.singboxConfig.reality) {
-                                            parts.push('REALITY')
-                                        } else if (profile.singboxConfig.security === 'tls' || profile.singboxConfig.tls) {
-                                            parts.push('TLS')
-                                        }
-                                        return parts.join(' ')
-                                    }
-                                    return PROTOCOL_INFO[profile.protocol].displayName
-                                })()}
-                            </span>
-                            <button
-                                className="title-bar-button"
-                                onClick={(e) => { e.stopPropagation(); testSingleProfile(profile.id, pingMode) }}
-                                title={`Test ${pingMode.toUpperCase()} (Ctrl+R)`}
-                                disabled={testingProfileIds?.includes(profile.id)}
-                            >
-                                <Activity size={16} className={testingProfileIds?.includes(profile.id) ? 'spin-animation' : ''} />
-                            </button>
-                            <button
-                                className="title-bar-button"
-                                onClick={(e) => { e.stopPropagation(); openEditModal(profile) }}
-                                title="Edit"
-                            >
-                                <Edit2 size={16} />
-                            </button>
-                            <button
-                                className="title-bar-button"
-                                onClick={(e) => handleDelete(e, profile.id)}
-                                title="Delete"
-                            >
-                                <Trash2 size={16} />
-                            </button>
-                        </div>
-                    ))}
-                </div>
+                <>
+                    <p className="profiles-hint" id="profile-actions-hint">Right-click or hold a profile for actions. Keyboard: Shift + F10.</p>
+                    <ul className="config-list" aria-label="VPN profiles">
+                        {displayedProfiles.map(profile => (
+                            <ProfileListCard
+                                key={profile.id}
+                                profile={profile}
+                                subscriptions={subscriptions}
+                                selected={currentProfile?.id === profile.id}
+                                actionTarget={actionProfile?.id === profile.id}
+                                testing={pingingIds.has(profile.id)}
+                                canPing={!isTestingPings}
+                                onSelect={() => { closeActions(); selectProfile(profile) }}
+                                onActions={(trigger, keyboard) => showActions(profile.id, trigger, keyboard)}
+                                onPing={() => void testSingleProfile(profile.id, pingMode)}
+                            />
+                        ))}
+                    </ul>
+                </>
+            )}
+            </div>
+
+            {actionProfile && (
+                <section className="profile-action-bar" aria-label="Profile actions">
+                    <div className="profile-action-target">
+                        <div className="profile-action-caption">Profile actions</div>
+                        <div className="profile-action-name" title={actionProfile.name} dir="auto">{actionProfile.name}</div>
+                    </div>
+                    <div className="profile-action-buttons">
+                        <button className="profile-action-button" type="button" ref={editAction}
+                            onClick={() => { closeActions(); openEditModal(actionProfile) }}>
+                            <Edit2 size={15} aria-hidden="true" /> Edit
+                        </button>
+                        <button className="profile-action-button" type="button" onClick={() => void shareProfile(actionProfile)}
+                            title={actionProfile.protocol === 'openconnect' || !actionProfile.singboxConfig?.uuid
+                                ? 'Export this profile as JSON without its login password' : 'Copy the share link, including profile credentials'}>
+                            <Share2 size={15} aria-hidden="true" /> Share
+                        </button>
+                        <button className="profile-action-button danger" type="button" onClick={() => handleDelete(actionProfile)}>
+                            <Trash2 size={15} aria-hidden="true" /> Delete
+                        </button>
+                        <button className="profile-action-button close" type="button" aria-label="Close profile actions"
+                            title="Close (Esc)" onClick={() => closeActions(true)}>
+                            <X size={16} aria-hidden="true" />
+                        </button>
+                    </div>
+                    {shareStatus?.profileId === actionProfile.id && <p className="profile-action-status" role="status">{shareStatus.message}</p>}
+                </section>
             )}
 
             {/* Add/Edit Modal */}

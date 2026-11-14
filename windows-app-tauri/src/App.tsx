@@ -96,7 +96,7 @@ function App() {
                         </nav>
 
                         {/* Content */}
-                        <main className="main-content">
+                        <main className={`main-content${currentScreen === 'profiles' ? ' profiles-content' : ''}`}>
                             {currentScreen === 'home' && <HomeScreen />}
                             {currentScreen === 'profiles' && <ProfilesScreen />}
                             {currentScreen === 'settings' && <SettingsScreen />}

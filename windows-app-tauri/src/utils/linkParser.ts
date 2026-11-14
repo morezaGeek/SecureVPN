@@ -9,6 +9,19 @@ export interface ParsedLink {
     config: SingboxProfile
 }
 
+function encodeBase64Text(text: string): string {
+    return btoa(Array.from(new TextEncoder().encode(text), byte => String.fromCharCode(byte)).join(''))
+}
+
+function decodeBase64Text(value: string): string {
+    const raw = atob(value.replace(/-/g, '+').replace(/_/g, '/'))
+    try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(raw, char => char.charCodeAt(0)))
+    } catch {
+        return raw // Older builds used Latin-1 for Base64 text.
+    }
+}
+
 /**
  * Parse any supported share link
  */
@@ -91,7 +104,7 @@ export function parseVlessLink(link: string): ParsedLink | null {
 export function parseVmessLink(link: string): ParsedLink | null {
     try {
         const base64 = link.replace('vmess://', '')
-        const json = JSON.parse(atob(base64))
+        const json = JSON.parse(decodeBase64Text(base64))
 
         // VMess JSON format fields:
         // v: version (usually "2")
@@ -203,17 +216,18 @@ export function parseShadowsocksLink(link: string): ParsedLink | null {
         if (remaining.includes('@')) {
             // SIP002: base64(method:password)@host:port
             const [encodedPart, serverPart] = remaining.split('@')
-            const decoded = atob(encodedPart)
+            const decoded = decodeBase64Text(encodedPart)
             const colonIdx = decoded.indexOf(':')
             method = decoded.slice(0, colonIdx)
             password = decoded.slice(colonIdx + 1)
 
-            const [host, portStr] = serverPart.split(':')
-            address = host
-            port = parseInt(portStr, 10)
+            const server = serverPart.match(/^(\[[^\]]+\]|[^:]+):(\d+)$/)
+            if (!server) return null
+            address = server[1].replace(/^\[|\]$/g, '')
+            port = Number(server[2])
         } else {
             // Legacy: base64(method:password@host:port)
-            const decoded = atob(remaining)
+            const decoded = decodeBase64Text(remaining)
             const match = decoded.match(/^([^:]+):([^@]+)@([^:]+):(\d+)$/)
             if (!match) throw new Error('Invalid SS format')
 
@@ -245,6 +259,7 @@ export function parseShadowsocksLink(link: string): ParsedLink | null {
  * Generate share link from profile (for export)
  */
 export function generateShareLink(protocol: VpnProtocol, name: string, config: SingboxProfile): string {
+    const host = config.address.includes(':') && !config.address.startsWith('[') ? `[${config.address}]` : config.address
     switch (protocol) {
         case 'vless': {
             const params = new URLSearchParams()
@@ -256,13 +271,14 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
             if (config.alpn) params.set('alpn', config.alpn.join(','))
             if (config.path) params.set('path', config.path)
             if (config.host) params.set('host', config.host)
+            if (config.serviceName) params.set('serviceName', config.serviceName)
             if (config.encryption) params.set('encryption', config.encryption)
             if (config.mode) params.set('mode', config.mode)
             if (config.extra) params.set('extra', JSON.stringify(config.extra))
             if (config.publicKey) params.set('pbk', config.publicKey)
             if (config.shortId) params.set('sid', config.shortId)
 
-            return `vless://${config.uuid}@${config.address}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
+            return `vless://${config.uuid}@${host}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
         }
 
         case 'vmess': {
@@ -281,7 +297,7 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
                 alpn: config.alpn?.join(',') || '',
                 sni: config.sni || ''
             }
-            return `vmess://${btoa(JSON.stringify(json))}`
+            return `vmess://${encodeBase64Text(JSON.stringify(json))}`
         }
 
         case 'trojan': {
@@ -293,8 +309,9 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
             if (config.fingerprint) params.set('fp', config.fingerprint)
             if (config.alpn) params.set('alpn', config.alpn.join(','))
             if (config.path) params.set('path', config.path)
+            if (config.host) params.set('host', config.host)
 
-            return `trojan://${encodeURIComponent(config.uuid)}@${config.address}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
+            return `trojan://${encodeURIComponent(config.uuid)}@${host}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
         }
 
         case 'hysteria2': {
@@ -308,12 +325,12 @@ export function generateShareLink(protocol: VpnProtocol, name: string, config: S
                 params.set('minPacketSize', String(config.hysteriaObfsMinPacketSize || 512))
                 params.set('maxPacketSize', String(config.hysteriaObfsMaxPacketSize || 1200))
             }
-            return `hysteria2://${encodeURIComponent(config.uuid)}@${config.address}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
+            return `hysteria2://${encodeURIComponent(config.uuid)}@${host}:${config.port}?${params.toString()}#${encodeURIComponent(name)}`
         }
 
         case 'shadowsocks': {
-            const encoded = btoa(`${config.method}:${config.uuid}`)
-            return `ss://${encoded}@${config.address}:${config.port}#${encodeURIComponent(name)}`
+            const encoded = encodeBase64Text(`${config.method}:${config.uuid}`)
+            return `ss://${encoded}@${host}:${config.port}#${encodeURIComponent(name)}`
         }
 
         default:

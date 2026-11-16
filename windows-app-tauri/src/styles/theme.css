@@ -782,6 +782,39 @@ body {
   overflow-wrap: anywhere;
 }
 
+.tunnel-dns-settings {
+  display: grid;
+  gap: var(--spacing-sm);
+}
+
+.tunnel-dns-settings input[type="url"] {
+  font-family: var(--font-mono);
+}
+
+.tunnel-dns-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: var(--spacing-xs);
+  font-size: 13px;
+}
+
+.tunnel-dns-option small {
+  display: block;
+}
+
+.tunnel-dns-buttons {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  margin-top: var(--spacing-sm);
+}
+
+.tunnel-dns-error {
+  color: var(--accent-red);
+  font-size: 13px;
+}
+
 /* ===== Stats Grid & Cards ===== */
 .stats-grid {
   display: grid;

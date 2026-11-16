@@ -137,6 +137,16 @@ async function run(){
  }
  await flush(()=>{tree=create(<ThemeProvider><VpnProvider><UpdateProvider><Capture/><SettingsScreen/></UpdateProvider></VpnProvider></ThemeProvider>)});
  await flush(()=>vpnListener({status:'connected',profile:fixtures[0]}));
+ const dnsForm = () => tree.root.findByProps({className:'tunnel-dns-settings'});
+ const dnsInput = () => tree.root.findByProps({id:'tunnel-doh-url'});
+ assert.equal(dnsInput().props.value,'https://8.8.8.8/dns-query','An existing settings file gets the Google DNS default');
+ await flush(()=>dnsInput().props.onChange({target:{value:'http://resolver.example.com/dns-query'}}));
+ await flush(()=>dnsForm().props.onSubmit({preventDefault(){}}));
+ assert.ok(tree.root.findByProps({role:'alert'}));
+ await flush(()=>dnsInput().props.onChange({target:{value:'https://resolver.example.com/dns-query'}}));
+ await flush(()=>dnsForm().props.onSubmit({preventDefault(){}}));
+ assert.equal(context.settings.tunnelDnsUrl,'https://resolver.example.com/dns-query');
+ assert.equal(routingCalls.length,0,'Saving Tunnel DNS waits for the next connection');
  const inputs=()=>tree.root.findAllByType('textarea')
  for(let i=0;i<5;i++)await flush(()=>inputs()[1].props.onBlur());
  assert.equal(routingCalls.length,0,'Unchanged blur must not reconnect')
@@ -150,6 +160,8 @@ async function run(){
  await flush(()=>routingPending.shift()!({success:true}));
  assert.equal(routingCalls.length,2);assert.equal(maxActiveRouting,1);
  assert.deepEqual(routingCalls[1].bypassDomains,['example.com']);assert.deepEqual(routingCalls[1].bypassIps,['1.1.1.1','10.50.0.0/16']);
+ assert.equal(routingCalls[1].tunnelDnsUrl,'https://resolver.example.com/dns-query');
+ assert.equal(routingCalls[1].tunnelDnsFakeIp,false);
  await flush(()=>routingPending.shift()!({success:true}));
  for(let i=0;i<5;i++)await flush(()=>{inputs()[0].props.onBlur();inputs()[1].props.onBlur()});
  assert.equal(routingCalls.length,2,'Neither input may restart repeatedly after save')
@@ -160,6 +172,9 @@ async function run(){
  await act(()=>{tree.root.findByProps({'aria-label':'Save bypass IPs'}).props.onClick()});
  assert.equal(routingCalls.length,3);await flush(()=>routingPending.shift()!({success:true}));
  const saved=JSON.parse(storage.get('vpn-settings')!);assert.deepEqual(saved.bypassIps,['192.168.10.5']);assert.deepEqual(saved.bypassDomains,['example.com']);
+ assert.equal(saved.tunnelDnsUrl,'https://resolver.example.com/dns-query');
+ await flush(()=>button(tree,'Use Google DNS').props.onClick());
+ assert.equal(JSON.parse(storage.get('vpn-settings')!).tunnelDnsUrl,'https://8.8.8.8/dns-query');
  await flush(()=>tree.unmount());
  let checks=0,installs=0,externalOpens=0;let updatePending:((result:any)=>void)[]=[];
  ;(api as any).checkUpdate=()=>{checks++;return new Promise(resolve=>updatePending.push(resolve))};

@@ -10,6 +10,8 @@ use tokio::process::Command;
 
 use crate::state::{VpnLog, VpnState, VpnStats};
 
+const DEFAULT_TUNNEL_DNS_URL: &str = "https://8.8.8.8/dns-query";
+
 fn strip_ansi_codes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut in_escape = false;
@@ -546,7 +548,42 @@ pub async fn build_singbox_test_config(profile: &Value, config_path: &Path) -> R
     Ok(())
 }
 
+fn tunnel_dns_server(endpoint: &str) -> Result<Value, String> {
+    let invalid = || "Enter a valid HTTPS DNS-over-HTTPS URL".to_string();
+    let url = reqwest::Url::parse(endpoint.trim()).map_err(|_| invalid())?;
+    if !endpoint.trim().get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
+        || url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
+        || url.fragment().is_some() || url.port() == Some(0)
+    {
+        return Err(invalid());
+    }
+    let host = url.host_str().ok_or_else(invalid)?;
+    let path = match url.path() {
+        "" | "/" => "/dns-query",
+        path => path,
+    };
+    let path = match url.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_string(),
+    };
+    let mut server = json!({
+        "type": "https",
+        "tag": "proxy-dns",
+        "server": host.trim_matches(['[', ']']),
+        "server_port": url.port().unwrap_or(443),
+        "path": path,
+        "detour": "proxy"
+    });
+    if matches!(url.host(), Some(url::Host::Domain(_))) {
+        server["domain_resolver"] = json!("direct-dns");
+    }
+    Ok(server)
+}
+
 pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result<(), String> {
+    let dns_url = profile.get("tunnelDnsUrl").and_then(Value::as_str).unwrap_or(DEFAULT_TUNNEL_DNS_URL);
+    let proxy_dns = tunnel_dns_server(dns_url)?;
+    let use_fake_ip = profile.get("tunnelDnsFakeIp").and_then(Value::as_bool).unwrap_or(false);
     let (raw_server_address, server_ip, outbound) = build_singbox_outbound(profile).await?;
     let singbox_cfg = profile.get("singboxConfig").cloned().unwrap_or(json!({}));
 
@@ -654,10 +691,9 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         }));
     }
 
-    dns_rules.push(json!({
-        "query_type": ["A", "AAAA"],
-        "server": "fakeip"
-    }));
+    if use_fake_ip {
+        dns_rules.push(json!({ "query_type": ["A", "AAAA"], "server": "fakeip" }));
+    }
 
     let mut route_exclude_addresses: Vec<Value> = Vec::new();
     if bypass_private_ips {
@@ -682,6 +718,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
             "action": "sniff",
             "sniffer": ["http", "tls", "quic"]
         }),
+        json!({ "port": 53, "action": "hijack-dns" }),
         json!({ "protocol": "dns", "action": "hijack-dns" }),
     ];
     route_rules.extend(server_direct_rules(&raw_server_address, &server_ip));
@@ -700,6 +737,18 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         }));
     }
 
+    if bypass_iran_routes {
+        route_rules.push(json!({
+            "domain_suffix": [".ir"],
+            "outbound": "direct"
+        }));
+    }
+
+    // Resolve domain destinations through the configured DNS, including cached FakeIP mappings.
+    if !use_fake_ip {
+        route_rules.push(json!({ "action": "resolve", "strategy": "ipv4_only" }));
+    }
+
     if !custom_ips.is_empty() {
         route_rules.push(json!({
             "ip_cidr": custom_ips,
@@ -715,10 +764,6 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
     }
 
     if bypass_iran_routes {
-        route_rules.push(json!({
-            "domain_suffix": [".ir"],
-            "outbound": "direct"
-        }));
         route_rules.push(json!({
             "ip_cidr": crate::iran_ips::IRAN_IP_CIDRS,
             "outbound": "direct"
@@ -741,13 +786,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
                     "tag": "fakeip",
                     "inet4_range": "198.18.0.0/15"
                 },
-                {
-                    "type": "tcp",
-                    "tag": "proxy-dns",
-                    "server": "8.8.8.8",
-                    "server_port": 53,
-                    "detour": "proxy"
-                },
+                proxy_dns,
                 {
                     "type": "local",
                     "tag": "direct-dns"
@@ -933,6 +972,46 @@ pub async fn run_tcp_ping(host: String, port: u16) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn windows_tunnel_uses_google_doh_until_user_selects_another_resolver() {
+        let config_path = std::env::temp_dir().join(format!("securevpn-dns-test-{}.json", std::process::id()));
+        let mut profile = json!({"protocol":"vless","serverAddress":"192.0.2.1","port":443,
+            "bypassIranRoutes":true,
+            "singboxConfig":{"uuid":"00000000-0000-4000-8000-000000000001","transport":"tcp"}});
+        build_singbox_config(&profile, &config_path).await.unwrap();
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        std::fs::remove_file(&config_path).unwrap();
+        let config: Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(config["dns"]["final"], "proxy-dns");
+        assert_eq!(config["dns"]["servers"][1], json!({
+            "type":"https","tag":"proxy-dns","server":"8.8.8.8",
+            "server_port":443,"path":"/dns-query","detour":"proxy"
+        }));
+        let dns_rules = config["dns"]["rules"].as_array().unwrap();
+        assert!(!dns_rules.iter().any(|rule| rule["server"] == "fakeip"));
+        let route_rules = config["route"]["rules"].as_array().unwrap();
+        let bypass_ir = route_rules.iter().position(|rule| rule["domain_suffix"] == json!([".ir"])).unwrap();
+        let resolve = route_rules.iter().position(|rule| rule["action"] == "resolve").unwrap();
+        assert!(bypass_ir < resolve);
+
+        profile["tunnelDnsUrl"] = json!("https://resolver.example.com:8443/query?name=default");
+        profile["tunnelDnsFakeIp"] = json!(true);
+        build_singbox_config(&profile, &config_path).await.unwrap();
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        std::fs::remove_file(&config_path).unwrap();
+        let config: Value = serde_json::from_str(&contents).unwrap();
+        let resolver = &config["dns"]["servers"][1];
+        assert_eq!(resolver["server"], "resolver.example.com");
+        assert_eq!(resolver["server_port"], 8443);
+        assert_eq!(resolver["path"], "/query?name=default");
+        assert_eq!(resolver["domain_resolver"], "direct-dns");
+        assert!(config["dns"]["rules"].as_array().unwrap().iter().any(|rule| rule["server"] == "fakeip"));
+
+        for invalid in ["https:resolver.example.com", "http://resolver.example.com", "https://user:pwd@resolver.example.com", "https://resolver.example.com:0", "https://resolver.example.com/#"] {
+            assert!(tunnel_dns_server(invalid).is_err());
+        }
+    }
 
     #[test]
     fn dns_failure_never_creates_hostname_cidr_and_ipv6_uses_host_prefix() {

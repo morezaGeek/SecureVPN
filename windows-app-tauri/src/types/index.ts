@@ -167,7 +167,12 @@ export interface AppSettings {
     bypassIranRoutes?: boolean
     bypassDomains?: string[]
     bypassIps?: string[]
+    tunnelDnsUrl: string
+    tunnelDnsFakeIp: boolean
+    openConnectServerDns: boolean
 }
+
+export const DEFAULT_TUNNEL_DNS_URL = 'https://8.8.8.8/dns-query'
 
 // Create default profile
 export function createDefaultProfile(): VpnProfile {
@@ -202,7 +207,10 @@ export function createDefaultSettings(): AppSettings {
         bypassPrivateIps: true,
         bypassIranRoutes: false,
         bypassDomains: [],
-        bypassIps: []
+        bypassIps: [],
+        tunnelDnsUrl: DEFAULT_TUNNEL_DNS_URL,
+        tunnelDnsFakeIp: false,
+        openConnectServerDns: false
     }
 }
 

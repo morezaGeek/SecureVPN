@@ -3,6 +3,7 @@ import { useVpn } from '../context/VpnContext'
 import { useTheme } from '../context/ThemeContext'
 import { Sun, Moon, Bell, Shield, Globe, Network, Check, Save } from 'lucide-react'
 import UpdateButton from '../components/UpdateButton'
+import TunnelDnsSettings from '../components/TunnelDnsSettings'
 import packageJson from '../../package.json'
 
 export default function SettingsScreen() {
@@ -223,6 +224,8 @@ export default function SettingsScreen() {
                     </select>
                 </div>
             </div>
+
+            <TunnelDnsSettings />
 
             {/* Bypass Rules (Direct Routing) */}
             <div className="settings-section">

@@ -523,6 +523,9 @@ export function VpnProvider({ children }: VpnProviderProps) {
                     bypassPrivateIps: isBypassActive,
                     bypassDomains: settings.bypassDomains || [],
                     bypassIps: settings.bypassIps || [],
+                    tunnelDnsUrl: settings.tunnelDnsUrl,
+                    tunnelDnsFakeIp: settings.tunnelDnsFakeIp,
+                    openConnectServerDns: settings.openConnectServerDns,
                     singboxConfig: target.singboxConfig ? {
                         ...target.singboxConfig,
                         mtu: settings.mtuSize, // Pass MTU from app settings
@@ -636,6 +639,9 @@ export function VpnProvider({ children }: VpnProviderProps) {
                 const bypass = snapshot.bypassIranRoutes === true
                 const routing = { bypassIranRoutes: bypass, bypassPrivateIps: bypass, bypassDomains: snapshot.bypassDomains || [], bypassIps: snapshot.bypassIps || [] }
                 const enriched = { ...profile, ...routing,
+                    tunnelDnsUrl: snapshot.tunnelDnsUrl,
+                    tunnelDnsFakeIp: snapshot.tunnelDnsFakeIp,
+                    openConnectServerDns: snapshot.openConnectServerDns,
                     singboxConfig: profile.singboxConfig ? { ...profile.singboxConfig, ...routing, mtu: snapshot.mtuSize, tunStack: snapshot.tunStack } : undefined }
                 try {
                     addLog({ profileId: profile.id, profileName: profile.name, level: 'info', message: 'Applying updated bypass rules...' })

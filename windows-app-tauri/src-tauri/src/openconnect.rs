@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::net::ToSocketAddrs;
+use std::net::{Ipv4Addr, ToSocketAddrs};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -161,6 +161,23 @@ pub fn cleanup_openconnect_routes(server_ip: Option<&str>, if_name: Option<&str>
     }
 }
 
+fn openconnect_dns_servers(use_server_dns: bool, vpn_dns: &str) -> (&str, Option<&str>) {
+    if use_server_dns && vpn_dns.parse::<Ipv4Addr>().is_ok_and(|ip| !ip.is_unspecified() && !ip.is_broadcast()) {
+        return (vpn_dns, None);
+    }
+    ("8.8.8.8", Some("8.8.4.4"))
+}
+
+#[cfg(test)]
+#[test]
+fn openconnect_defaults_to_google_dns_and_can_use_the_vpn_resolver() {
+    let google = ("8.8.8.8", Some("8.8.4.4"));
+    assert_eq!(openconnect_dns_servers(false, "10.1.1.1"), google);
+    assert_eq!(openconnect_dns_servers(true, ""), google);
+    assert_eq!(openconnect_dns_servers(true, "0.0.0.0"), google);
+    assert_eq!(openconnect_dns_servers(true, "10.1.1.1"), ("10.1.1.1", None));
+}
+
 pub fn apply_openconnect_routing(
     server_ip: &str,
     orig_gw: &str,
@@ -231,8 +248,9 @@ pub fn apply_openconnect_routing(
         }
 
         // 4. Set DNS on the adapter
-        let primary_dns = if !vpn_dns.is_empty() { vpn_dns } else { "8.8.8.8" };
-        let _ = std::process::Command::new("netsh")
+        let use_server_dns = profile.get("openConnectServerDns").and_then(Value::as_bool).unwrap_or(false);
+        let (primary_dns, secondary_dns) = openconnect_dns_servers(use_server_dns, vpn_dns);
+        let dns_result = std::process::Command::new("netsh")
             .args([
                 "interface", "ipv4", "set", "dnsservers",
                 &format!("name=\"{}\"", target_adapter),
@@ -240,14 +258,23 @@ pub fn apply_openconnect_routing(
             ])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
-        let _ = std::process::Command::new("netsh")
-            .args([
-                "interface", "ipv4", "add", "dnsservers",
-                &format!("name=\"{}\"", target_adapter),
-                "1.1.1.1", "index=2", "validate=no"
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
+        if dns_result.is_ok_and(|result| result.status.success()) {
+            if let Some(secondary_dns) = secondary_dns {
+                let result = std::process::Command::new("netsh")
+                    .args([
+                        "interface", "ipv4", "add", "dnsservers",
+                        &format!("name=\"{}\"", target_adapter),
+                        secondary_dns, "index=2", "validate=no"
+                    ])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+                if !result.is_ok_and(|output| output.status.success()) {
+                    log_msg("Could not set the secondary DNS on the VPN adapter.");
+                }
+            }
+        } else {
+            log_msg("Could not set DNS on the VPN adapter.");
+        }
 
         let _ = std::process::Command::new("ipconfig")
             .arg("/flushdns")
@@ -430,7 +457,7 @@ pub async fn spawn_openconnect(
     let detected_wintun_name: Arc<Mutex<String>> = Arc::new(Mutex::new("SecureVPN".into()));
     let detected_vpn_ip: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let detected_vpn_mask: Arc<Mutex<String>> = Arc::new(Mutex::new("255.255.255.0".into()));
-    let detected_vpn_dns: Arc<Mutex<String>> = Arc::new(Mutex::new("8.8.8.8".into()));
+    let detected_vpn_dns: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let detected_server_ip: Arc<Mutex<String>> = Arc::new(Mutex::new(server_ip_resolved.clone()));
     let detected_mtu: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(Some(mtu as u32)));
     let routing_applied = Arc::new(AtomicBool::new(false));

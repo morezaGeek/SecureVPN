@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use regex::Regex;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -51,7 +51,7 @@ pub fn resolve_host_to_ip(host: &str) -> Option<String> {
     }
     let target = format!("{}:443", host);
     if let Ok(mut addrs) = target.to_socket_addrs() {
-        if let Some(addr) = addrs.next() {
+        if let Some(addr) = addrs.find(|addr| addr.is_ipv4()) {
             return Some(addr.ip().to_string());
         }
     }
@@ -409,11 +409,16 @@ pub async fn spawn_openconnect(
 
     let mut cmd = Command::new(&bin_path);
     cmd.arg("--protocol=anyconnect")
+       .arg("--disable-ipv6")
        .arg(format!("--server={}:{}", server_address, port))
        .arg("--interface=SecureVPN")
        .arg("--script").arg(&short_script_path)
        .arg("--passwd-on-stdin")
        .arg("-v");
+
+    if server_ip_resolved != server_address {
+        cmd.arg(format!("--resolve={server_address}:{server_ip_resolved}"));
+    }
 
     if !username.is_empty() {
         cmd.arg(format!("--user={}", username));
@@ -677,6 +682,7 @@ pub async fn spawn_openconnect(
         if session_id.load(Ordering::SeqCst) != session { return; }
         is_running_clone.store(false, Ordering::SeqCst);
         cleanup_openconnect_routes(Some(&server_ip_for_exit), Some("SecureVPN"));
+        app_clone3.state::<crate::commands::AppState>().ipv6_block.lock().await.take();
         *state = VpnState::default();
         let _ = app_clone3.emit("vpn:stateChanged", VpnState {
             status: "disconnected".into(),

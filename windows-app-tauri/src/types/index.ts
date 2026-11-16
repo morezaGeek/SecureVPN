@@ -169,6 +169,7 @@ export interface AppSettings {
     bypassIps?: string[]
     tunnelDnsUrl: string
     tunnelDnsFakeIp: boolean
+    preferIpv6: boolean
     openConnectServerDns: boolean
 }
 
@@ -210,6 +211,7 @@ export function createDefaultSettings(): AppSettings {
         bypassIps: [],
         tunnelDnsUrl: DEFAULT_TUNNEL_DNS_URL,
         tunnelDnsFakeIp: false,
+        preferIpv6: false,
         openConnectServerDns: false
     }
 }

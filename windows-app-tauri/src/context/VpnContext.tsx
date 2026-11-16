@@ -525,6 +525,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
                     bypassIps: settings.bypassIps || [],
                     tunnelDnsUrl: settings.tunnelDnsUrl,
                     tunnelDnsFakeIp: settings.tunnelDnsFakeIp,
+                    preferIpv6: settings.preferIpv6,
                     openConnectServerDns: settings.openConnectServerDns,
                     singboxConfig: target.singboxConfig ? {
                         ...target.singboxConfig,
@@ -641,6 +642,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
                 const enriched = { ...profile, ...routing,
                     tunnelDnsUrl: snapshot.tunnelDnsUrl,
                     tunnelDnsFakeIp: snapshot.tunnelDnsFakeIp,
+                    preferIpv6: snapshot.preferIpv6,
                     openConnectServerDns: snapshot.openConnectServerDns,
                     singboxConfig: profile.singboxConfig ? { ...profile.singboxConfig, ...routing, mtu: snapshot.mtuSize, tunStack: snapshot.tunStack } : undefined }
                 try {

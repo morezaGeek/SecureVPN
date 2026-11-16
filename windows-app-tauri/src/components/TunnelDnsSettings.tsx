@@ -56,7 +56,7 @@ export default function TunnelDnsSettings() {
                 <p id="tunnel-doh-help" className="settings-label-description">V2Ray and Hysteria2 use this resolver through the tunnel.</p>
                 <label className="tunnel-dns-option">
                     <input type="checkbox" checked={fakeIp} onChange={event => { setFakeIp(event.target.checked); setSaved(false) }} />
-                    <span>FakeIP <small className="settings-label-description">Use synthetic addresses for A/AAAA queries</small></span>
+                    <span>FakeIP <small className="settings-label-description">Use synthetic IPv4 addresses.</small></span>
                 </label>
                 <label className="tunnel-dns-option">
                     <input type="checkbox" checked={serverDns} onChange={event => { setServerDns(event.target.checked); setSaved(false) }} />

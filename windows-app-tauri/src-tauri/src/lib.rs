@@ -4,6 +4,7 @@ mod update_transfer;
 mod commands;
 pub mod iran_ips;
 mod openconnect;
+mod ipv6;
 mod singbox;
 mod state;
 mod updater;
@@ -31,6 +32,7 @@ pub fn run() {
     let app_state = AppState {
         vpn_state: Arc::new(Mutex::new(VpnState::default())),
         active_pid: Arc::new(Mutex::new(None)),
+        ipv6_block: Mutex::new(None),
         is_running: Arc::new(AtomicBool::new(false)),
         session: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };

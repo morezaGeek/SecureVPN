@@ -225,6 +225,25 @@ export default function SettingsScreen() {
                 </div>
             </div>
 
+            <div className="settings-section">
+                <h3 className="settings-section-title">IP Routing</h3>
+                <div className="settings-row">
+                    <div className="settings-label">
+                        <label className="settings-label-text" htmlFor="prefer-ipv6">Prefer IPv6</label>
+                        <span className="settings-label-description" id="prefer-ipv6-description">
+                            Prefer IPv6 when available. Off blocks IPv6 while connected. Reconnect to apply.
+                            OpenConnect uses IPv4.
+                        </span>
+                    </div>
+                    <label className="toggle">
+                        <input id="prefer-ipv6" type="checkbox" checked={settings.preferIpv6}
+                            aria-describedby="prefer-ipv6-description"
+                            onChange={event => { void updateSettings({ preferIpv6: event.target.checked }) }} />
+                        <span className="toggle-slider" />
+                    </label>
+                </div>
+            </div>
+
             <TunnelDnsSettings />
 
             {/* Bypass Rules (Direct Routing) */}

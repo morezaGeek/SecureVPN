@@ -4,13 +4,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::ipv6::prefer_ipv6;
 use crate::state::{VpnLog, VpnState, VpnStats};
 
 const DEFAULT_TUNNEL_DNS_URL: &str = "https://8.8.8.8/dns-query";
+const TUN_IPV6_ADDRESS: &str = "2001:db8:19::1/126";
 
 fn strip_ansi_codes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -111,7 +113,7 @@ async fn build_outbound(profile: &Value, tag: &str, resolve_server: bool) -> Res
     let protocol = profile.get("protocol").and_then(|v| v.as_str()).unwrap_or("vless");
     let raw_server_address = profile.get("serverAddress")
         .and_then(|v| v.as_str())
-        .map(|s| s.trim())
+        .map(|s| s.trim().trim_matches(['[', ']']))
         .filter(|s| !s.is_empty())
         .unwrap_or("127.0.0.1");
     let port = profile.get("port").and_then(|v| v.as_u64()).unwrap_or(443);
@@ -581,10 +583,20 @@ fn tunnel_dns_server(endpoint: &str) -> Result<Value, String> {
 }
 
 pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result<(), String> {
+    let prefer_ipv6 = prefer_ipv6(profile);
+    let dns_strategy = if prefer_ipv6 { "prefer_ipv6" } else { "ipv4_only" };
     let dns_url = profile.get("tunnelDnsUrl").and_then(Value::as_str).unwrap_or(DEFAULT_TUNNEL_DNS_URL);
     let proxy_dns = tunnel_dns_server(dns_url)?;
     let use_fake_ip = profile.get("tunnelDnsFakeIp").and_then(Value::as_bool).unwrap_or(false);
     let (raw_server_address, server_ip, outbound) = build_singbox_outbound(profile).await?;
+    if !prefer_ipv6 {
+        if server_ip.parse::<std::net::Ipv6Addr>().is_ok() {
+            return Err("Enable Prefer IPv6 to use this VPN server address".into());
+        }
+        if proxy_dns["server"].as_str().is_some_and(|host| host.contains(':')) {
+            return Err("Enable Prefer IPv6 to use this DNS resolver address".into());
+        }
+    }
     let singbox_cfg = profile.get("singboxConfig").cloned().unwrap_or(json!({}));
 
     let bypass_private_ips = profile.get("bypassPrivateIps").and_then(|v| v.as_bool())
@@ -650,7 +662,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
                     if trimmed.contains('/') {
                         custom_ips.push(trimmed.to_string());
                     } else {
-                        custom_ips.push(format!("{}/32", trimmed));
+                        custom_ips.push(server_cidr(trimmed).unwrap_or_else(|| format!("{trimmed}/32")));
                     }
                 }
             }
@@ -692,7 +704,7 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
     }
 
     if use_fake_ip {
-        dns_rules.push(json!({ "query_type": ["A", "AAAA"], "server": "fakeip" }));
+        dns_rules.push(json!({ "query_type": "A", "server": "fakeip" }));
     }
 
     let mut route_exclude_addresses: Vec<Value> = Vec::new();
@@ -721,6 +733,9 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         json!({ "port": 53, "action": "hijack-dns" }),
         json!({ "protocol": "dns", "action": "hijack-dns" }),
     ];
+    if !prefer_ipv6 {
+        route_rules.insert(0, json!({ "ip_version": 6, "action": "reject" }));
+    }
     route_rules.extend(server_direct_rules(&raw_server_address, &server_ip));
 
     if !custom_domains.is_empty() {
@@ -744,9 +759,9 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
         }));
     }
 
-    // Resolve domain destinations through the configured DNS, including cached FakeIP mappings.
+    // Resolve real DNS answers locally. FakeIP keeps domain resolution on the VPN server.
     if !use_fake_ip {
-        route_rules.push(json!({ "action": "resolve", "strategy": "ipv4_only" }));
+        route_rules.push(json!({ "action": "resolve", "strategy": dns_strategy }));
     }
 
     if !custom_ips.is_empty() {
@@ -771,6 +786,10 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
     }
 
     route_rules.push(json!({ "clash_mode": "Direct", "outbound": "direct" }));
+    let mut tun_addresses = vec!["172.19.0.1/30"];
+    if prefer_ipv6 {
+        tun_addresses.push(TUN_IPV6_ADDRESS);
+    }
     route_rules.push(json!({ "ip_cidr": ["198.18.0.0/15"], "outbound": "proxy" }));
 
     // Build complete config conforming strictly to sing-box 1.12 - 1.14+ specifications
@@ -794,14 +813,14 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
             ],
             "rules": dns_rules,
             "final": "proxy-dns",
-            "strategy": "ipv4_only"
+            "strategy": dns_strategy
         },
         "inbounds": [
             {
                 "type": "tun",
                 "tag": "tun-in",
                 "interface_name": "SecureVPN-SB",
-                "address": ["172.19.0.1/30"],
+                "address": tun_addresses,
                 "mtu": 1400,
                 "auto_route": true,
                 "strict_route": false,
@@ -839,6 +858,10 @@ pub async fn build_singbox_config(profile: &Value, config_path: &Path) -> Result
     });
 
     configure_ech_dns(&mut full_config, std::slice::from_ref(profile))?;
+    if !prefer_ipv6 {
+        full_config["dns"]["rules"].as_array_mut().unwrap().insert(0,
+            json!({ "query_type": "AAAA", "action": "predefined", "rcode": "NOERROR" }));
+    }
     let config_str = serde_json::to_string_pretty(&full_config).map_err(|e| e.to_string())?;
     std::fs::write(config_path, config_str).map_err(|e| e.to_string())?;
     Ok(())
@@ -946,6 +969,7 @@ pub async fn spawn_singbox(
         let status = child.wait().await;
         let mut state = vpn_state.lock().await;
         if session_id.load(Ordering::SeqCst) != session { return; }
+        app_clone3.state::<crate::commands::AppState>().ipv6_block.lock().await.take();
         is_running_clone.store(false, Ordering::SeqCst);
         crate::commands::clear_app_system_proxy();
         *state = VpnState::default();
@@ -972,6 +996,52 @@ pub async fn run_tcp_ping(host: String, port: u16) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn windows_tunnel_applies_ipv6_policy_with_real_dns_and_fakeip() {
+        let config_path = std::env::temp_dir().join(format!("securevpn-ipv6-test-{}.json", std::process::id()));
+        let mut profile = json!({
+            "protocol": "vless",
+            "serverAddress": "192.0.2.1",
+            "singboxConfig": {"uuid": "00000000-0000-4000-8000-000000000001"}
+        });
+        let bundled_core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../resources/singbox/sing-box.exe");
+
+        for prefer in [false, true] {
+            // Omitting the preference exercises saved settings from older versions.
+            if prefer {
+                profile["preferIpv6"] = json!(true);
+            }
+            for fake_ip in [false, true] {
+                profile["tunnelDnsFakeIp"] = json!(fake_ip);
+                build_singbox_config(&profile, &config_path).await.unwrap();
+                if bundled_core.is_file() {
+                    let check = Command::new(&bundled_core).args(["check", "-c"])
+                        .arg(&config_path).output().await.unwrap();
+                    assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
+                }
+                let config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+                let strategy = if prefer { "prefer_ipv6" } else { "ipv4_only" };
+                assert_eq!(config["dns"]["strategy"], strategy);
+                let addresses = config["inbounds"][0]["address"].as_array().unwrap();
+                assert!(addresses.contains(&json!("172.19.0.1/30")));
+                assert_eq!(addresses.contains(&json!(TUN_IPV6_ADDRESS)), prefer);
+                let rules = config["route"]["rules"].as_array().unwrap();
+                assert_eq!(rules[0] == json!({"ip_version": 6, "action": "reject"}), !prefer);
+                assert_eq!(
+                    rules.iter().find(|rule| rule["action"] == "resolve").map(|rule| &rule["strategy"]),
+                    (!fake_ip).then_some(&json!(strategy))
+                );
+                let dns_rules = config["dns"]["rules"].as_array().unwrap();
+                assert_eq!(dns_rules[0]["query_type"] == "AAAA", !prefer);
+                assert_eq!(
+                    dns_rules.iter().find(|rule| rule["server"] == "fakeip").map(|rule| &rule["query_type"]),
+                    fake_ip.then_some(&json!("A"))
+                );
+            }
+        }
+        std::fs::remove_file(config_path).unwrap();
+    }
 
     #[tokio::test]
     async fn windows_tunnel_uses_google_doh_until_user_selects_another_resolver() {

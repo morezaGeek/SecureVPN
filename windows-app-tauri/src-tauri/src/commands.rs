@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::sync::Mutex;
 
+use crate::ipv6::{prefer_ipv6, Ipv6Block};
 use crate::openconnect::{spawn_openconnect, cleanup_openconnect_routes, resolve_host_to_ip};
 use crate::singbox::{build_singbox_batch_test_config, build_singbox_config, run_tcp_ping, spawn_singbox};
 use crate::state::{VpnState, VpnStats};
@@ -13,6 +14,7 @@ use crate::state::{VpnState, VpnStats};
 pub struct AppState {
     pub vpn_state: Arc<Mutex<VpnState>>,
     pub active_pid: Arc<Mutex<Option<u32>>>,
+    pub(crate) ipv6_block: Mutex<Option<Ipv6Block>>,
     pub is_running: Arc<AtomicBool>,
     pub session: Arc<AtomicU64>,
 }
@@ -54,6 +56,7 @@ pub async fn app_close(window: Window, state: State<'_, AppState>) -> Result<(),
         *pid_lock = None;
     }
     state.is_running.store(false, Ordering::SeqCst);
+    state.ipv6_block.lock().await.take();
     window.close().map_err(|e| e.to_string())
 }
 
@@ -168,30 +171,36 @@ pub async fn vpn_connect(
     s.profile = Some(profile.clone());
 
     let protocol = profile.get("protocol").and_then(|v| v.as_str()).unwrap_or("vless");
+    let uses_singbox = ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol);
     state.is_running.store(true, Ordering::SeqCst);
 
     // Route setup/validation errors through the same state cleanup as spawn errors.
-    let pid_res = async { if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
-        let bin_path = resolve_binary(&app, "singbox/sing-box.exe")?;
-
-        let temp_dir = std::env::temp_dir();
-        let config_path = temp_dir.join("secure-vpn-singbox.json");
-
-        build_singbox_config(&profile, &config_path).await?;
-        spawn_singbox(app.clone(), bin_path, config_path, state.is_running.clone(), state.vpn_state.clone(), state.session.clone(), session).await
-    } else {
-        let bin_path = resolve_binary(&app, "openconnect/openconnect.exe")?;
-
-        spawn_openconnect(
-            app.clone(),
-            bin_path,
-            profile.clone(),
-            None,
-            state.is_running.clone(),
-            state.vpn_state.clone(),
-            state.session.clone(), session,
-        ).await
-    } }.await;
+    let pid_res = async {
+        {
+            let mut block = state.ipv6_block.lock().await;
+            // The legacy OpenConnect adapter configures only IPv4 on Windows.
+            if uses_singbox && prefer_ipv6(&profile) {
+                block.take();
+            } else if block.is_none() {
+                *block = Some(Ipv6Block::install()?);
+            }
+        }
+        if uses_singbox {
+            let bin_path = resolve_binary(&app, "singbox/sing-box.exe")?;
+            let config_path = std::env::temp_dir().join("secure-vpn-singbox.json");
+            build_singbox_config(&profile, &config_path).await?;
+            spawn_singbox(
+                app.clone(), bin_path, config_path, state.is_running.clone(),
+                state.vpn_state.clone(), state.session.clone(), session,
+            ).await
+        } else {
+            let bin_path = resolve_binary(&app, "openconnect/openconnect.exe")?;
+            spawn_openconnect(
+                app.clone(), bin_path, profile.clone(), None, state.is_running.clone(),
+                state.vpn_state.clone(), state.session.clone(), session,
+            ).await
+        }
+    }.await;
 
     match pid_res {
         Ok(pid) => {
@@ -201,7 +210,7 @@ pub async fn vpn_connect(
             s.stats.connected_time = 0;
             let _ = app.emit("vpn:stateChanged", s.clone());
 
-            if ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"].contains(&protocol) {
+            if uses_singbox {
                 clear_app_system_proxy();
             }
 
@@ -364,6 +373,7 @@ fn get_windows_network_bytes() -> Option<(u64, u64)> {
             Ok(json!({ "success": true }))
         }
         Err(e) => {
+            state.ipv6_block.lock().await.take();
             s.status = "error".into();
             state.is_running.store(false, Ordering::SeqCst);
             let _ = app.emit("vpn:stateChanged", s.clone());
@@ -406,6 +416,7 @@ pub async fn vpn_disconnect(app: AppHandle, state: State<'_, AppState>) -> Resul
 
     state.session.fetch_add(1, Ordering::SeqCst);
     state.is_running.store(false, Ordering::SeqCst);
+    state.ipv6_block.lock().await.take();
     s.status = "disconnected".into();
     s.profile = None;
     s.stats = VpnStats::default();

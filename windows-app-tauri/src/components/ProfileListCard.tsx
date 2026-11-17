@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Activity, Check, Loader2 } from 'lucide-react'
-import { PROTOCOL_INFO, VpnProfile, VpnSubscription } from '../types'
+import { PROTOCOL_INFO, VpnProfile, VpnSubscription, effectiveXhttpMode } from '../types'
 import { hasPingResult, pingTone } from '../utils/profilePresentation'
 import { getFlag } from './Flags'
 import SubscriptionBadge from './SubscriptionBadge'
@@ -12,19 +12,22 @@ function countryCode(profile: VpnProfile): string {
     return profile.name.match(/^([A-Z]{2})\s/)?.[1] ?? ''
 }
 
-function protocolLabel(profile: VpnProfile): string {
+function protocolLabel(profile: VpnProfile, forceXhttpStreamUp: boolean): string {
     const name = PROTOCOL_INFO[profile.protocol]?.displayName ?? profile.protocol
     const config = profile.singboxConfig
     if (!config || profile.protocol === 'hysteria2' || profile.protocol === 'openconnect') return name
     const security = config.security === 'reality' || config.reality ? 'REALITY'
         : config.security === 'tls' || config.tls ? 'TLS' : null
-    return [name, (config.transport || 'tcp').toUpperCase(), security].filter(Boolean).join(' · ')
+    const mode = effectiveXhttpMode(profile, forceXhttpStreamUp)
+    const transport = [(config.transport || 'tcp').toUpperCase(), mode].filter(Boolean).join(' ')
+    return [name, transport, security].filter(Boolean).join(' · ')
 }
 
-export default function ProfileListCard({ profile, subscriptions, selected, actionTarget,
+export default function ProfileListCard({ profile, subscriptions, forceXhttpStreamUp, selected, actionTarget,
     testing, canPing, onSelect, onActions, onPing }: {
     profile: VpnProfile
     subscriptions: VpnSubscription[]
+    forceXhttpStreamUp: boolean
     selected: boolean
     actionTarget: boolean
     testing: boolean
@@ -112,7 +115,7 @@ export default function ProfileListCard({ profile, subscriptions, selected, acti
                 </span>
                 <span className="config-card-details">
                     <span className="config-card-endpoint" dir="ltr" title={endpoint}>{endpoint}</span>
-                    <span className="config-card-protocol">{protocolLabel(profile)}</span>
+                    <span className="config-card-protocol">{protocolLabel(profile, forceXhttpStreamUp)}</span>
                 </span>
             </button>
             <button

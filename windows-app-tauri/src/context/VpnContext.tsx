@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react'
-import { VpnProfile, ConnectionState, ConnectionStats, ConnectionLog, AppSettings, createDefaultSettings, VpnSubscription, createDefaultProfile } from '../types'
+import { VpnProfile, ConnectionState, ConnectionStats, ConnectionLog, AppSettings, createDefaultSettings, VpnSubscription, createDefaultProfile, withEffectiveXhttpMode } from '../types'
 
 interface VpnContextType {
     // Connection state
@@ -356,6 +356,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
                     port: link.config.port,
                     singboxConfig: link.config,
                     subscriptionId: id,
+                    xhttpModeOverride: link.config.transport === 'xhttp' ? old?.xhttpModeOverride : undefined,
                     createdAt: old?.createdAt || Date.now(),
                     lastConnected: old?.lastConnected,
                 }})
@@ -457,7 +458,8 @@ export function VpnProvider({ children }: VpnProviderProps) {
         setProfiles(prev => prev.map(p => ids.has(p.id) ? { ...p, ping: undefined, pingMode: undefined } : p))
         try {
             if (mode === 'real') {
-                const results = await api.batchRealDelay(targets, undefined, requestId)
+                const force = settingsRef.current.forceXhttpStreamUp
+                const results = await api.batchRealDelay(targets.map(p => withEffectiveXhttpMode(p, force)), undefined, requestId)
                 for (const p of targets) acceptPing(p.id, results[p.id] ?? -1, p.protocol === 'openconnect' ? 'tcp' : 'real', requestId)
             } else {
                 for (let i = 0; i < targets.length && pingRun.current?.id === requestId; i += 4) {
@@ -517,8 +519,9 @@ export function VpnProvider({ children }: VpnProviderProps) {
             if (window.electronAPI) {
                 // Use settings as the single authoritative source for split tunneling
                 const isBypassActive = settings.bypassIranRoutes === true
+                const effective = withEffectiveXhttpMode(target, settings.forceXhttpStreamUp)
                 const enrichedProfile = {
-                    ...target,
+                    ...effective,
                     bypassIranRoutes: isBypassActive,
                     bypassPrivateIps: isBypassActive,
                     bypassDomains: settings.bypassDomains || [],
@@ -527,8 +530,8 @@ export function VpnProvider({ children }: VpnProviderProps) {
                     tunnelDnsFakeIp: settings.tunnelDnsFakeIp,
                     preferIpv6: settings.preferIpv6,
                     openConnectServerDns: settings.openConnectServerDns,
-                    singboxConfig: target.singboxConfig ? {
-                        ...target.singboxConfig,
+                    singboxConfig: effective.singboxConfig ? {
+                        ...effective.singboxConfig,
                         mtu: settings.mtuSize, // Pass MTU from app settings
                         tunStack: settings.tunStack, // Pass TUN Stack from app settings
                         bypassIranRoutes: isBypassActive,
@@ -626,7 +629,7 @@ export function VpnProvider({ children }: VpnProviderProps) {
         const merged = { ...previous, ...newSettings }
         settingsRef.current = merged
         setSettings(merged)
-        const routingKeys: (keyof AppSettings)[] = ['bypassIranRoutes', 'bypassPrivateIps', 'bypassDomains', 'bypassIps', 'tunStack', 'mtuSize']
+        const routingKeys: (keyof AppSettings)[] = ['bypassIranRoutes', 'bypassPrivateIps', 'bypassDomains', 'bypassIps', 'tunStack', 'mtuSize', 'forceXhttpStreamUp']
         if (!changed.some(key => routingKeys.includes(key)) || connectionStateRef.current !== 'connected' || !window.electronAPI) return true
         pendingRouting.current = merged
         if (applyingRouting.current) return applyingRouting.current
@@ -635,8 +638,9 @@ export function VpnProvider({ children }: VpnProviderProps) {
             while (pendingRouting.current) {
                 const snapshot = pendingRouting.current
                 pendingRouting.current = null
-                const profile = currentProfileRef.current
-                if (connectionStateRef.current !== 'connected' || !profile) break
+                const active = currentProfileRef.current
+                if (connectionStateRef.current !== 'connected' || !active) break
+                const profile = withEffectiveXhttpMode(active, snapshot.forceXhttpStreamUp)
                 const bypass = snapshot.bypassIranRoutes === true
                 const routing = { bypassIranRoutes: bypass, bypassPrivateIps: bypass, bypassDomains: snapshot.bypassDomains || [], bypassIps: snapshot.bypassIps || [] }
                 const enriched = { ...profile, ...routing,

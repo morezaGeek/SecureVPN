@@ -94,6 +94,8 @@ export interface VpnProfile {
 
     // sing-box specific (for VLESS, VMess, Trojan, Shadowsocks)
     singboxConfig?: SingboxProfile
+    // Local XHTTP mode choice; kept outside singboxConfig so subscription refreshes preserve it.
+    xhttpModeOverride?: XhttpMode
 
     // Server location
     countryCode?: string
@@ -171,9 +173,40 @@ export interface AppSettings {
     tunnelDnsFakeIp: boolean
     preferIpv6: boolean
     openConnectServerDns: boolean
+    forceXhttpStreamUp: boolean
 }
 
 export const DEFAULT_TUNNEL_DNS_URL = 'https://8.8.8.8/dns-query'
+
+export const XHTTP_MODES = ['auto', 'packet-up', 'stream-up', 'stream-one'] as const
+export type XhttpMode = typeof XHTTP_MODES[number]
+
+function asXhttpMode(value: unknown): XhttpMode | undefined {
+    return XHTTP_MODES.find(mode => mode === value)
+}
+
+/** Mode the server's share link asks for; missing or unknown values mean "auto". */
+export function linkXhttpMode(config?: SingboxProfile): XhttpMode {
+    return asXhttpMode(config?.mode) ?? asXhttpMode(config?.extra?.mode) ?? 'auto'
+}
+
+/**
+ * XHTTP mode used to connect. A profile override wins; otherwise an explicit server mode
+ * is respected. "auto" means packet-up on TLS/CDN paths, which is slow for interactive
+ * apps, so the app setting can turn it into stream-up.
+ */
+export function effectiveXhttpMode(profile: VpnProfile, forceStreamUp: boolean): XhttpMode | undefined {
+    if (profile.singboxConfig?.transport !== 'xhttp') return undefined
+    const override = asXhttpMode(profile.xhttpModeOverride)
+    if (override) return override
+    const server = linkXhttpMode(profile.singboxConfig)
+    return server === 'auto' && forceStreamUp ? 'stream-up' : server
+}
+
+export function withEffectiveXhttpMode(profile: VpnProfile, forceStreamUp: boolean): VpnProfile {
+    const mode = effectiveXhttpMode(profile, forceStreamUp)
+    return mode && profile.singboxConfig ? { ...profile, singboxConfig: { ...profile.singboxConfig, mode } } : profile
+}
 
 // Create default profile
 export function createDefaultProfile(): VpnProfile {
@@ -212,7 +245,8 @@ export function createDefaultSettings(): AppSettings {
         tunnelDnsUrl: DEFAULT_TUNNEL_DNS_URL,
         tunnelDnsFakeIp: false,
         preferIpv6: false,
-        openConnectServerDns: false
+        openConnectServerDns: false,
+        forceXhttpStreamUp: true
     }
 }
 

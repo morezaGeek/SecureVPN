@@ -244,6 +244,25 @@ export default function SettingsScreen() {
                 </div>
             </div>
 
+            <div className="settings-section">
+                <h3 className="settings-section-title">XHTTP</h3>
+                <div className="settings-row">
+                    <div className="settings-label">
+                        <label className="settings-label-text" htmlFor="force-xhttp-stream-up">Use stream-up for auto mode</label>
+                        <span className="settings-label-description" id="force-xhttp-stream-up-description">
+                            XHTTP links set to auto connect with stream-up, which opens connections and uploads faster.
+                            Modes set by the server or on a profile are kept. Turn off if a server only accepts packet-up.
+                        </span>
+                    </div>
+                    <label className="toggle">
+                        <input id="force-xhttp-stream-up" type="checkbox" checked={settings.forceXhttpStreamUp}
+                            aria-describedby="force-xhttp-stream-up-description"
+                            onChange={event => { void updateSettings({ forceXhttpStreamUp: event.target.checked }) }} />
+                        <span className="toggle-slider" />
+                    </label>
+                </div>
+            </div>
+
             <TunnelDnsSettings />
 
             {/* Bypass Rules (Direct Routing) */}

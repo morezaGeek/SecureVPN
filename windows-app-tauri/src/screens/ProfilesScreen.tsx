@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useVpn } from '../context/VpnContext'
-import { VpnProfile, VpnProtocol, AuthType, PROTOCOL_INFO, createDefaultProfile, SingboxTransport, SingboxSecurity } from '../types'
+import { VpnProfile, VpnProtocol, AuthType, PROTOCOL_INFO, createDefaultProfile, SingboxTransport, SingboxSecurity,
+    XHTTP_MODES, effectiveXhttpMode, linkXhttpMode } from '../types'
 import { Plus, Globe, Edit2, Trash2, X, Check, Download, Upload, Clipboard, RefreshCw, Link as LinkIcon, Database, Play, RotateCcw, Share2, ArrowDownWideNarrow } from 'lucide-react'
 import { parseShareLink, generateShareLink } from '../utils/linkParser'
 import { orderProfilesBySubscription, sortProfilesByPing, type ProfileSort } from '../utils/profilePresentation'
@@ -25,8 +26,9 @@ export default function ProfilesScreen() {
         clearPings,
         cancelPings,
         pingProgress,
-        isTestingPings, 
-        testingProfileIds 
+        isTestingPings,
+        testingProfileIds,
+        settings
     } = useVpn()
     const [pingMode, setPingMode] = useState<'tcp' | 'http' | 'real'>(() => {
         const saved = localStorage.getItem('vpn-ping-mode')
@@ -548,6 +550,7 @@ export default function ProfilesScreen() {
                                 key={profile.id}
                                 profile={profile}
                                 subscriptions={subscriptions}
+                                forceXhttpStreamUp={settings.forceXhttpStreamUp}
                                 selected={currentProfile?.id === profile.id}
                                 actionTarget={actionProfile?.id === profile.id}
                                 testing={pingingIds.has(profile.id)}
@@ -832,6 +835,26 @@ export default function ProfilesScreen() {
                                                     handleChange('singboxConfig', { ...config, path: e.target.value })
                                                 }}
                                             />
+                                        </div>
+                                    )}
+
+                                    {formData.singboxConfig?.transport === 'xhttp' && (
+                                        <div className="form-group">
+                                            <label className="form-label" htmlFor="xhttp-mode">XHTTP Mode</label>
+                                            <select
+                                                id="xhttp-mode"
+                                                className="form-input form-select"
+                                                aria-describedby="xhttp-mode-description"
+                                                value={formData.xhttpModeOverride || ''}
+                                                onChange={e => handleChange('xhttpModeOverride', e.target.value || undefined)}
+                                            >
+                                                <option value="">Follow app setting ({effectiveXhttpMode({ ...formData, xhttpModeOverride: undefined }, settings.forceXhttpStreamUp)})</option>
+                                                {XHTTP_MODES.map(mode => <option key={mode} value={mode}>{mode}</option>)}
+                                            </select>
+                                            <span className="text-muted" id="xhttp-mode-description"
+                                                style={{ display: 'block', marginTop: 'var(--spacing-xs)', fontSize: 12 }}>
+                                                Server link: {linkXhttpMode(formData.singboxConfig)}. Your choice is kept when the subscription refreshes. Reconnect to apply.
+                                            </span>
                                         </div>
                                     )}
 

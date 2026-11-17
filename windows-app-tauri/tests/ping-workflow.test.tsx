@@ -10,6 +10,7 @@ import { UpdateProvider } from '../src/context/UpdateContext'
 import UpdateButton from '../src/components/UpdateButton'
 import { parseShareLink, parseSubscriptionData, generateShareLink } from '../src/utils/linkParser'
 import { pingTone, sortProfilesByPing } from '../src/utils/profilePresentation'
+import { effectiveXhttpMode, withEffectiveXhttpMode } from '../src/types'
 const storage = new Map<string,string>()
 Object.assign(globalThis, {
  localStorage: {getItem:(k:string)=>storage.get(k)??null,setItem:(k:string,v:string)=>storage.set(k,v),removeItem:(k:string)=>storage.delete(k)},
@@ -38,6 +39,13 @@ async function run(){
  const ech=parseShareLink(echLink)!;assert.equal(ech.config.ech,'cloudflare-ech.com+udp://1.1.1.1');assert.equal(ech.config.path,'/test%2Fkeep');
  assert.deepEqual(parseShareLink(generateShareLink('vless',ech.name,ech.config)),ech);
  assert.equal(parseSubscriptionData(echLink,{},'https://example.com/sub').links.length,1);
+ const xhttp=(mode?:string,xhttpModeOverride?:string)=>({...fixtures[0],xhttpModeOverride,singboxConfig:{transport:'xhttp',security:'tls',mode}}) as any;
+ assert.equal(effectiveXhttpMode(xhttp('auto'),true),'stream-up','Auto links use stream-up by default');
+ assert.equal(effectiveXhttpMode(xhttp(undefined),false),'auto');
+ assert.equal(effectiveXhttpMode(xhttp('packet-up'),true),'packet-up','An explicit server mode is respected');
+ assert.equal(effectiveXhttpMode(xhttp('stream-up','packet-up'),true),'packet-up','A profile choice wins');
+ assert.equal(effectiveXhttpMode(fixtures[0] as any,true),undefined);
+ assert.equal(withEffectiveXhttpMode(xhttp('auto'),true).singboxConfig?.mode,'stream-up');
  const gecko=parseShareLink('hysteria2://p%3A%40ss@example.com:443?obfs=gecko&obfs-password=test&minPacketSize=600&maxPacketSize=1300#Test')!;
  assert.equal(gecko.config.uuid,'p:@ss');assert.equal(gecko.config.hysteriaObfsMinPacketSize,600);
  assert.deepEqual(parseShareLink(generateShareLink('hysteria2',gecko.name,gecko.config)),gecko);

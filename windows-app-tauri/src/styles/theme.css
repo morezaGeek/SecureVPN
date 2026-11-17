@@ -5,13 +5,13 @@
 
 /* ===== CSS Variables & Material Theme ===== */
 :root {
-  /* Colors - Sharp Material 3 Dark Palette */
-  --bg-primary: #0c0e14;
-  --bg-secondary: #12151f;
-  --bg-tertiary: #181c28;
-  --bg-card: #151824;
-  --bg-hover: #1e2333;
-  --bg-active: #252b3d;
+  /* Colors - true-black dark palette matching the server cards */
+  --bg-primary: #000000;
+  --bg-secondary: #000000;
+  --bg-tertiary: #121212;
+  --bg-card: #000000;
+  --bg-hover: #181818;
+  --bg-active: #232323;
 
   /* Accent Colors - Crisp & Solid */
   --accent-primary: #2563eb;
@@ -31,13 +31,13 @@
   --gradient-glow: none;
 
   /* Text - Crisp High Contrast */
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-primary: #ffffff;
+  --text-secondary: #b7b7b7;
+  --text-muted: #8a8a8a;
 
   /* Sharp Borders */
-  --border-color: #23283a;
-  --border-color-subtle: rgba(255, 255, 255, 0.05);
+  --border-color: #373737;
+  --border-color-subtle: #2a2a2a;
   --border-color-focus: #3b82f6;
   --border-radius-sm: 4px;
   --border-radius: 8px;
@@ -1307,7 +1307,7 @@ body {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  background-color: #0c0e14;
+  background-color: var(--bg-primary);
   z-index: 9999;
 }
 
